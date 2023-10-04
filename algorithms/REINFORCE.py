@@ -80,7 +80,7 @@ class REINFORCE(Algorithm):
 
 			# Collecting data for an episode
 
-			while not done:
+			while not done and current_episode_step < self.max_episode_steps:
 				probs = self.policy_network(obs)
 				m = Categorical(probs=probs)
 				action = m.sample()
@@ -95,9 +95,6 @@ class REINFORCE(Algorithm):
 				obs = torch.from_numpy(new_obs).to(self.device).float()
 				current_episode_step += 1
 
-				if done or current_episode_step >= self.max_episode_steps:
-					break
-
 			# Computing G values
 
 			G = torch.zeros((current_episode_step,), device=self.device)
@@ -108,7 +105,7 @@ class REINFORCE(Algorithm):
 
 			# Updating the network
 			self.optimizer.zero_grad()
-			loss = - (log_probs[:current_episode_step] * G).sum()
+			loss = - (log_probs[:current_episode_step] * G).mean()
 			loss.backward()
 			self.optimizer.step()
 

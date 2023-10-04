@@ -125,37 +125,38 @@ class DQN(Algorithm):
 
 				obs = new_obs
 
-				if self.replay_memory.current_length >= self.batch_size:
-
-					states, actions, rewards, next_states, are_terminals = self.replay_memory.sample(self.batch_size)
-
-					states = torch.from_numpy(states).float().to(self.device)
-					actions = torch.from_numpy(actions).long().to(self.device)
-					rewards = torch.from_numpy(rewards).float().to(self.device)
-					next_states = torch.from_numpy(next_states).float().to(self.device)
-					are_terminals = torch.from_numpy(are_terminals).float().to(self.device)
-
-					predictions = self.policy_network(states).gather(dim=1, index=actions.unsqueeze(1))
-
-					with torch.no_grad():
-						target = (rewards + self.gamma * self.target_network(next_states).max(1)[0] * (1 - are_terminals)).unsqueeze(1)
-
-					self.optimizer.zero_grad()
-					loss = self.loss_fn(predictions, target)
-					self.losses.append(loss.item())
-
-					loss.backward()
-					self.optimizer.step()
-
-					self.eps = max(self.eps * self.eps_decay, self.eps_min)
-
-					if steps_before_target_network_update == 0:
-						self.target_network.load_state_dict(self.policy_network.state_dict())
-						steps_before_target_network_update = self.target_network_update_frequency
-
-					steps_before_target_network_update -= 1
-
 				steps += 1
+
+				if self.replay_memory.current_length < self.batch_size:
+					continue
+
+				states, actions, rewards, next_states, are_terminals = self.replay_memory.sample(self.batch_size)
+
+				states = torch.from_numpy(states).float().to(self.device)
+				actions = torch.from_numpy(actions).long().to(self.device)
+				rewards = torch.from_numpy(rewards).float().to(self.device)
+				next_states = torch.from_numpy(next_states).float().to(self.device)
+				are_terminals = torch.from_numpy(are_terminals).float().to(self.device)
+
+				predictions = self.policy_network(states).gather(dim=1, index=actions.unsqueeze(1))
+
+				with torch.no_grad():
+					target = (rewards + self.gamma * self.target_network(next_states).max(1)[0] * (1 - are_terminals)).unsqueeze(1)
+
+				self.optimizer.zero_grad()
+				loss = self.loss_fn(predictions, target)
+				self.losses.append(loss.item())
+
+				loss.backward()
+				self.optimizer.step()
+
+				self.eps = max(self.eps * self.eps_decay, self.eps_min)
+
+				if steps_before_target_network_update == 0:
+					self.target_network.load_state_dict(self.policy_network.state_dict())
+					steps_before_target_network_update = self.target_network_update_frequency
+
+				steps_before_target_network_update -= 1
 
 			if episode % self.log_freq == 0:
 				self.log_stats(episode=episode, avg_period=10)

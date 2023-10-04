@@ -5,7 +5,6 @@ import torch
 from gymnasium.vector.utils import spaces
 from torch import nn, tensor
 from torch.distributions import Categorical
-from torch.nn.functional import normalize
 
 from algorithms.Algorithm import Algorithm
 from models.FCNet import FCNet
@@ -25,7 +24,6 @@ class A2C(Algorithm):
 			t_max: steps between each updates
 		"""
 		super().__init__(config=config)
-
 		self.actor_losses = []
 		self.critic_losses = []
 		self.entropy = []
@@ -36,7 +34,8 @@ class A2C(Algorithm):
 		self.critic_lr: float = config.get("critic_lr", .0002)
 		self.gamma: float = config.get("gamma", .99)
 		self.t_max: int = config.get("t_max", 5)
-		self.beta: float = config.get("beta", .001)
+		self.ent_coef: float = config.get("ent_coef", .001)
+		self.vf_coef = config.get("vf_coef", .5)
 
 		# Policy
 
@@ -156,26 +155,26 @@ class A2C(Algorithm):
 
 		T = self.t_max if not is_terminal else terminal_state_index + 1
 
-		R = torch.zeros((T, 1), device=self.device)
-		R[-1] = rewards[T - 1]
+		returns = torch.zeros((T, 1), device=self.device)
+		returns[-1] = rewards[T - 1]
 		if is_terminal:
-			R[-1] += self.gamma * self.critic(states[terminal_state_index])
+			returns[-1] += self.gamma * self.critic(states[terminal_state_index])
 
 		for t in range(T - 2, -1, -1):
-			R[t] = rewards[t] + self.gamma * R[t + 1]
+			returns[t] = rewards[t] + self.gamma * returns[t + 1]
 
 		V = self.critic(states[:T])
-		R_V = (R - V).squeeze(1)
+		R_V = (returns - V).squeeze(1)
 
 		# Updating the network
-		self.actor_optimizer.zero_grad()
-		actor_loss = - (log_probs[:T] * R_V.detach() + self.beta * entropy[:T]).mean()
-		actor_loss.backward()
-		self.actor_optimizer.step()
+		actor_loss = - (log_probs[:T] * R_V.detach()).mean()
+		critic_loss = self.vf_coef * torch.pow(R_V, 2).mean()
+		entropy_loss = (self.ent_coef * entropy).mean()
 
+		self.actor_optimizer.zero_grad()
 		self.critic_optimizer.zero_grad()
-		critic_loss = torch.pow(R_V, 2).mean()
-		critic_loss.backward()
+		(actor_loss + critic_loss - entropy_loss).backward()
+		self.actor_optimizer.step()
 		self.critic_optimizer.step()
 
 		self.actor_losses.append(actor_loss.item())

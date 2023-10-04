@@ -76,14 +76,14 @@ class Algorithm:
 
 	def plot_training_stats(self, stats: list[tuple[str | str | list[float]]]) -> None:
 		"""
-		:param stats: list of tuples of "x-axis title", "y-axis title", "values"
+		:param stats: list of tuples of "y-axis title", "x-axis title", "values"
 		:return:
 		"""
 		cols = len(stats) // 2 + len(stats) % 2
 		n = 20
 		fig, axs = plt.subplots(2, cols, figsize=(36 // cols, 8))
 
-		for i, (x, y, values) in enumerate(stats):
+		for i, (y, x, values) in enumerate(stats):
 			axs[i % 2][i // cols].plot(values, label="Real value")
 			axs[i % 2][i // cols].plot([sum(values[max(0, j - n + 1):j + 1]) / min(j + 1, n) for j in range(len(values))], label=f"Average on {n} lasts")
 			axs[i % 2][i // cols].set(xlabel=x, ylabel=y)

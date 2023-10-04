@@ -21,7 +21,7 @@ class ActorCritic(nn.Module):
 
 		self.fc = FCNet(config=config)
 		self.actor_output = nn.Softmax(dim=-1)
-		self.critic_output = nn.Linear(config["output_size"], 1)
+		self.critic_output = nn.Linear(config.get("output_size", 1), 1)
 
 	def forward(self, x):
 		x = self.fc(x)

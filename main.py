@@ -15,17 +15,16 @@ if __name__ == "__main__":
 		"env": env,
 		"device": device,
 		"actor_hidden_layers_nb": 2,
-		"actor_hidden_size": 32,
+		"actor_hidden_size": 64,
 		"critic_hidden_layers_nb": 2,
-		"critic_hidden_size": 32,
+		"critic_hidden_size": 64,
 		"gamma": .99,
-		"actor_lr": .0003,
-		"critic_lr": .0003,
+		"lr": .0005,
 		"log_freq": 100,
-		"t_max": 5,
-		"ent_coef": .0005,
+		"t_max": 10,
+		"ent_coef": .001,
 	})
 
-	algo.train(max_steps=20_000, plot_training_stats=True)
+	algo.train(max_steps=10_000, plot_training_stats=True)
 
 	env.close()

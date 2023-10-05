@@ -23,8 +23,6 @@ class Algorithm:
 		self.env: gym.Env = config.get("env", None)
 		assert self.env is not None, \
 			"No environment provided!"
-		assert isinstance(self.env.action_space, gym.spaces.Discrete), \
-			"Only discrete action spaces are currently supported!"
 		self.max_episode_steps = self.env.spec.max_episode_steps
 
 		# Training stats

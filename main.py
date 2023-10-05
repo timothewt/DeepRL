@@ -19,11 +19,11 @@ if __name__ == "__main__":
 		"critic_hidden_layers_nb": 2,
 		"critic_hidden_size": 64,
 		"gamma": .99,
-		"actor_lr": .001,
-		"critic_lr": .005,
+		"actor_lr": .0001,
+		"critic_lr": .0005,
 		"log_freq": 100,
-		"t_max": 10,
-		"ent_coef": .01,
+		"t_max": 20,
+		"ent_coef": .001,
 	})
 
 	algo.train(max_steps=100_000, plot_training_stats=True)

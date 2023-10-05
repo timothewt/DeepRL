@@ -207,7 +207,7 @@ class A2C(Algorithm):
 				("Actor loss", "Update step", self.actor_losses),
 				("Critic loss", "Update step", self.critic_losses),
 				("Entropy", "Update step", self.entropy),
-			], n=max_steps//100)
+			], n=max_steps//1000)
 
 	def update_networks(self, buffer: Buffer) -> None:
 

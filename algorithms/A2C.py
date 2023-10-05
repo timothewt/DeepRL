@@ -4,9 +4,11 @@ import numpy as np
 import torch
 from gymnasium.vector.utils import spaces
 from torch import nn, tensor
+from torch.distributions import Categorical
 
 from algorithms.Algorithm import Algorithm
 from models.ActorCritic import ActorCritic
+from models.FCNet import FCNet
 
 
 class Buffer:
@@ -78,7 +80,8 @@ class A2C(Algorithm):
 
 		# Algorithm hyperparameters
 
-		self.lr: float = config.get("lr", .0002)
+		self.actor_lr: float = config.get("actor_lr", .0002)
+		self.critic_lr: float = config.get("critic_lr", .0002)
 		self.gamma: float = config.get("gamma", .99)
 		self.t_max: int = config.get("t_max", 5)
 		self.ent_coef: float = config.get("ent_coef", .001)
@@ -96,15 +99,29 @@ class A2C(Algorithm):
 		elif isinstance(self.env.observation_space, spaces.Discrete):
 			input_size = self.env.observation_space.n
 
+		if isinstance(self.env.action_space, spaces.Discrete):
+			output_size = self.env.action_space.n
+		else:
+			raise "Only discrete action space currently supported"
+
 		actor_config = {
 			"input_size": input_size,
-			"output_size": self.env.action_space.n,
+			"output_size": output_size,
 			"hidden_layers_nb": config.get("actor_hidden_layers_nb", 3),
 			"hidden_size": config.get("actor_hidden_size", 32),
+			"output_function": nn.Softmax(dim=-1)
 		}
-		self.network: nn.Module = ActorCritic(config=actor_config).to(self.device)
+		self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
+		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
-		self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.lr)
+		critic_config = {
+			"input_size": input_size,
+			"output_size": 1,
+			"hidden_layers_nb": config.get("critic_hidden_layers_nb", 3),
+			"hidden_size": config.get("critic_hidden_size", 32),
+		}
+		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
+		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
 	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
 		# From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
@@ -133,7 +150,8 @@ class A2C(Algorithm):
 			# Collecting data for an episode
 
 			while not (done or truncated):
-				dist, value = self.network(obs)
+				probs, value = self.actor(obs), self.critic(obs)
+				dist = Categorical(probs=probs)
 				action = dist.sample()
 
 				new_obs, reward, done, truncated, _ = self.env.step(action.item())
@@ -188,9 +206,11 @@ class A2C(Algorithm):
 		critic_loss = torch.pow(advantages, 2).mean()
 		entropy_loss = buffer.entropies.mean()
 
-		self.optimizer.zero_grad()
+		self.actor_optimizer.zero_grad()
+		self.critic_optimizer.zero_grad()
 		(actor_loss + self.vf_coef * critic_loss - self.ent_coef * entropy_loss).backward()
-		self.optimizer.step()
+		self.actor_optimizer.step()
+		self.critic_optimizer.step()
 
 		self.actor_losses.append(actor_loss.item())
 		self.critic_losses.append(critic_loss.item())

@@ -60,17 +60,17 @@ class Algorithm:
 				current_episode_step += 1
 
 			if episode % self.log_freq == 0:
-				self.log_stats(episode=episode, avg_period=10)
+				self.log_rewards(episode=episode, avg_period=10)
 
 			episode += 1
 			steps += current_episode_step
 
 		print("==== TRAINING COMPLETE ====")
 
-	def log_stats(self, episode: int, avg_period: int) -> None:
+	def log_rewards(self, episode: int, avg_period: int) -> None:
 		print(f"--- Episode {episode} ---\n"
 			f"\tAverage reward (last {avg_period} episodes): "
-			f"{round(sum(self.rewards[max(0, episode - avg_period): episode + 1]) / avg_period, 1)}")
+			f"{round(sum(self.rewards[max(0, episode - avg_period + 1): episode + 1]) / min(episode + 1, avg_period), 1)}")
 
 	def plot_training_stats(self, stats: list[tuple[str | str | list[float]]]) -> None:
 		"""

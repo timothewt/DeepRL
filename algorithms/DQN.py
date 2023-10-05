@@ -159,7 +159,7 @@ class DQN(Algorithm):
 				steps_before_target_network_update -= 1
 
 			if episode % self.log_freq == 0:
-				self.log_stats(episode=episode, avg_period=10)
+				self.log_rewards(episode=episode, avg_period=10)
 
 			episode += 1
 

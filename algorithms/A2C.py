@@ -14,6 +14,7 @@ from models.FCNet import FCNet
 class Buffer:
 	def __init__(self, max_len: int = 5, state_shape: tuple[int] = (1,), device: torch.device = torch.device("cpu")):
 		self.states = torch.empty((max_len,) + state_shape, device=device, dtype=torch.float)
+		self.next_states = torch.empty((max_len,) + state_shape, device=device, dtype=torch.float)
 		self.dones = torch.empty((max_len,), device=device, dtype=torch.float)
 		self.actions = torch.empty((max_len,), device=device, dtype=torch.float)
 		self.rewards = torch.empty((max_len,), device=device, dtype=torch.float)
@@ -28,10 +29,11 @@ class Buffer:
 	def is_full(self) -> bool:
 		return self.i == self.max_len
 
-	def push(self, state: np.ndarray, done: bool, action: int, reward: float, value: float, log_prob: float, entropy: float) -> None:
+	def push(self, state: np.ndarray, next_state: np.ndarray, done: bool, action: int, reward: float, value: float, log_prob: float, entropy: float) -> None:
 		assert self.i < self.max_len, "Buffer is full!"
 
 		self.states[self.i] = state
+		self.next_states[self.i] = next_state
 		self.dones[self.i] = done
 		self.actions[self.i] = action
 		self.rewards[self.i] = reward
@@ -41,8 +43,9 @@ class Buffer:
 
 		self.i += 1
 
-	def get(self, index: int = 0) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+	def get(self, index: int = 0) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
 		return self.states[index],\
+			self.next_states[index],\
 			self.dones[index],\
 			self.actions[index],\
 			self.rewards[index],\
@@ -50,8 +53,8 @@ class Buffer:
 			self.log_probs[index],\
 			self.entropies[index]
 
-	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
-		return self.states, self.dones, self.actions, self.rewards, self.values, self.log_probs, self.entropies
+	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs, self.entropies
 
 	def reset(self) -> None:
 		self.values = torch.empty((self.max_len,), device=self.device, dtype=torch.float)
@@ -155,12 +158,13 @@ class A2C(Algorithm):
 				action = dist.sample()
 
 				new_obs, reward, done, truncated, _ = self.env.step(action.item())
+				new_obs = torch.from_numpy(new_obs).to(self.device).float()
 
+				buffer.push(obs, new_obs, done or truncated, action, reward, value, dist.log_prob(action), dist.entropy())
+
+				obs = new_obs
 				ep_rewards += reward
-				obs = torch.from_numpy(new_obs).to(self.device).float()
 				current_episode_step += 1
-
-				buffer.push(obs, done or truncated, action, reward, value, dist.log_prob(action), dist.entropy())
 
 				if buffer.is_full():
 					self.update_networks(buffer)
@@ -189,22 +193,22 @@ class A2C(Algorithm):
 		buffer: Buffer,
 	) -> None:
 
-		_, dones, _, rewards, values, log_probs, entropies = buffer.get_all()
+		states, next_states, dones, _, rewards, values, log_probs, entropies = buffer.get_all()
 
 		# Computing advantages
-		next_value = values[-1]
-		R = torch.zeros((buffer.max_len, 1), device=self.device)
+		R = self.critic(next_states[-1])  # next_value
+		returns = torch.zeros((buffer.max_len, 1), device=self.device)
 
 		for t in reversed(range(buffer.max_len)):
-			R[t] = rewards[t] + self.gamma * (1 - dones[t]) * next_value
-			next_value = values[t]
+			R = rewards[t] + self.gamma * R * (1 - dones[t])
+			returns[t] = R
 
-		advantages = R - values
+		advantages = returns - values
 
 		# Updating the network
-		actor_loss = - (buffer.log_probs * advantages.detach()).mean()
-		critic_loss = torch.pow(advantages, 2).mean()
-		entropy_loss = buffer.entropies.mean()
+		actor_loss = - (log_probs * advantages.detach()).mean()
+		critic_loss = advantages.pow(2).mean()
+		entropy_loss = entropies.mean()
 
 		self.actor_optimizer.zero_grad()
 		self.critic_optimizer.zero_grad()
@@ -214,4 +218,4 @@ class A2C(Algorithm):
 
 		self.actor_losses.append(actor_loss.item())
 		self.critic_losses.append(critic_loss.item())
-		self.entropy.append(buffer.entropies.mean().item())
+		self.entropy.append(entropies.mean().item())

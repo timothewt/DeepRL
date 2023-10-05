@@ -70,9 +70,7 @@ class Algorithm:
 	def log_stats(self, episode: int, avg_period: int) -> None:
 		print(f"--- Episode {episode} ---\n"
 			f"\tAverage reward (last {avg_period} episodes): "
-			f"{round(sum(self.rewards[episode - avg_period: episode]) / avg_period, 1)}\n"
-			f"\tAverage loss (last {avg_period} episodes): "
-			f"{round(sum(self.losses[episode - avg_period: episode]) / avg_period, 3)}")
+			f"{round(sum(self.rewards[max(0, episode - avg_period): episode + 1]) / avg_period, 1)}")
 
 	def plot_training_stats(self, stats: list[tuple[str | str | list[float]]]) -> None:
 		"""

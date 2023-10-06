@@ -95,7 +95,7 @@ class A2C(Algorithm):
 
 		# Vectorized envs
 
-		self.num_envs = config.get("num_envs", 1)
+		self.num_envs = max(config.get("num_envs", 1), 1)
 		self.envs: gym.experimental.vector.VectorEnv = gym.make_vec(config.get("env_name", None), num_envs=self.num_envs)
 
 		# Stats

@@ -194,10 +194,10 @@ class A2C(Algorithm):
 			else:
 				# actor output is [[mean0, var0],[mean1, var1],...[meanN, varN]]
 				# transposes it so that is becomes [[mean0, mean1, ..., meanN],[var0, var1, ..., varN]]
-				means, log_stds = actor_output.t()
-				dist = Normal(loc=means, scale=log_stds.exp())
+				means, pre_stds = actor_output.t()  # pre_stds because it needs SoftPlus and sqrt
+				dist = Normal(loc=means, scale=torch.sqrt(torch.log(1 + pre_stds.exp())))
 				actions = dist.sample()
-				actions_to_input = self.scale_to_action_space(actions).numpy()
+				actions_to_input = self.scale_to_action_space(actions).unsqueeze(1).numpy()
 
 			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncated

@@ -85,7 +85,7 @@ class Algorithm:
 			data_for_avg = [values[max(0, j - n_2):j + n_2] for j in range(len(values))]
 			axs[i % 2][i // cols].plot([sum(data) / len(data) for data in data_for_avg], label=f"Average on {n}")
 			axs[i % 2][i // cols].set(xlabel=x, ylabel=y)
-			axs[i % 2][i // cols].legend(loc="upper right")
+			axs[i % 2][i // cols].legend(loc="lower right")
 
 		fig.tight_layout(pad=.2)
 		plt.show()

@@ -11,7 +11,7 @@ class Algorithm:
 		"""
 		:param config:
 			device: device used by PyTorch
-			env: environment instance
+			env_name: name of the environment in the gym register
 			log_freq: episodes interval for logging the current stats of the algorithm
 		"""
 		# Device
@@ -20,7 +20,7 @@ class Algorithm:
 
 		# Environment
 
-		self.env: gym.Env = config.get("env", None)
+		self.env: gym.Env = gym.make(config.get("env_name", None))
 		assert self.env is not None, \
 			"No environment provided!"
 		self.max_episode_steps = self.env.spec.max_episode_steps

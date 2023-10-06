@@ -2,26 +2,33 @@ from typing import Any
 
 import numpy as np
 import torch
-from gymnasium.vector.utils import spaces
+import gymnasium as gym
+from gymnasium import spaces
 from torch import nn, tensor
 from torch.distributions import Categorical, Normal
 
 from algorithms.Algorithm import Algorithm
-from models.ActorCritic import ActorCritic
 from models.FCNet import FCNet
 
 
 class Buffer:
-	def __init__(self, max_len: int = 5, state_shape: tuple[int] = (1,), device: torch.device = torch.device("cpu")):
-		self.states = torch.empty((max_len,) + state_shape, device=device, dtype=torch.float)
-		self.next_states = torch.empty((max_len,) + state_shape, device=device, dtype=torch.float)
-		self.dones = torch.empty((max_len,), device=device, dtype=torch.float)
-		self.actions = torch.empty((max_len,), device=device, dtype=torch.float)
-		self.rewards = torch.empty((max_len,), device=device, dtype=torch.float)
-		self.values = torch.empty((max_len,), device=device, dtype=torch.float)
-		self.log_probs = torch.empty((max_len,), device=device, dtype=torch.float)
-		self.entropies = torch.empty((max_len,), device=device, dtype=torch.float)
+	def __init__(
+			self,
+			num_envs: int,
+			max_len: int = 5,
+			state_shape: tuple[int] = (1,),
+			device: torch.device = torch.device("cpu"),
+	):
+		self.states = torch.empty((max_len, num_envs) + state_shape, device=device)
+		self.next_states = torch.empty((max_len, num_envs) + state_shape, device=device)
+		self.dones = torch.empty((max_len, num_envs, 1), device=device)
+		self.actions = torch.empty((max_len, num_envs, 1), device=device)
+		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
+		self.values = torch.empty((max_len, num_envs, 1), device=device)
+		self.log_probs = torch.empty((max_len, num_envs, 1), device=device)
+		self.entropies = torch.empty((max_len, num_envs, 1), device=device)
 
+		self.num_envs = num_envs
 		self.max_len = max_len
 		self.device = device
 		self.i = 0
@@ -29,22 +36,31 @@ class Buffer:
 	def is_full(self) -> bool:
 		return self.i == self.max_len
 
-	def push(self, state: np.ndarray, next_state: np.ndarray, done: bool, action: int, reward: float, value: float,
-			 log_prob: float, entropy: float) -> None:
+	def push(
+			self,
+			states: np.ndarray,
+			next_states: np.ndarray,
+			dones: bool,
+			actions: int,
+			rewards: float,
+			values: float,
+			log_probs: float,
+			entropies: float
+	) -> None:
 		assert self.i < self.max_len, "Buffer is full!"
 
-		self.states[self.i] = state
-		self.next_states[self.i] = next_state
-		self.dones[self.i] = done
-		self.actions[self.i] = action
-		self.rewards[self.i] = reward
-		self.values[self.i] = value
-		self.log_probs[self.i] = log_prob
-		self.entropies[self.i] = entropy
+		self.states[self.i] = states
+		self.next_states[self.i] = next_states
+		self.dones[self.i] = dones
+		self.actions[self.i] = actions
+		self.rewards[self.i] = rewards
+		self.values[self.i] = values
+		self.log_probs[self.i] = log_probs
+		self.entropies[self.i] = entropies
 
 		self.i += 1
 
-	def get(self, index: int = 0) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+	def get(self, index: int = 0) -> tuple[np.ndarray]:
 		return self.states[index], \
 			self.next_states[index], \
 			self.dones[index], \
@@ -58,9 +74,9 @@ class Buffer:
 		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs, self.entropies
 
 	def reset(self) -> None:
-		self.values = torch.empty((self.max_len,), device=self.device, dtype=torch.float)
-		self.log_probs = torch.empty((self.max_len,), device=self.device, dtype=torch.float)
-		self.entropies = torch.empty((self.max_len,), device=self.device, dtype=torch.float)
+		self.values = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
+		self.log_probs = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
+		self.entropies = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
 		self.i = 0
 
 
@@ -69,15 +85,21 @@ class A2C(Algorithm):
 	def __init__(self, config: dict[str | Any]):
 		"""
 		:param config:
-			device: device used by PyTorch
-			env: environment instance
-			log_freq: episodes interval for logging the current stats of the algorithm
+			num_envs: number of environments in parallel
 			actor_lr: learning rate of the actor
 			critic_lr: learning rate of the critic
 			gamma: discount factor
 			t_max: steps between each updates
 		"""
 		super().__init__(config=config)
+
+		# Vectorized envs
+
+		self.num_envs = config.get("num_envs", 1)
+		self.envs: gym.experimental.vector.VectorEnv = gym.make_vec(config.get("env_name", None), num_envs=self.num_envs)
+
+		# Stats
+
 		self.actor_losses = []
 		self.critic_losses = []
 		self.entropy = []
@@ -94,29 +116,31 @@ class A2C(Algorithm):
 		# Policy
 
 		# Observations
-		assert isinstance(self.env.observation_space, spaces.Box) or \
-			isinstance(self.env.observation_space, spaces.Discrete), \
+		obs_space = self.envs.single_observation_space
+		assert isinstance(obs_space, spaces.Box) or isinstance(obs_space, spaces.Discrete), \
 			"Only Box and Discrete observation spaces currently supported"
 
-		if isinstance(self.env.observation_space, spaces.Discrete):
-			input_size = self.env.observation_space.n
-		else:
-			input_size = int(np.prod(self.env.observation_space.shape))
-
-		assert isinstance(self.env.action_space, spaces.Box) or \
-			isinstance(self.env.action_space, spaces.Discrete), \
-			"Only Box and Discrete action spaces currently supported"
+		input_size = 1
+		if isinstance(obs_space, spaces.Discrete):
+			input_size = obs_space.n
+		elif isinstance(obs_space, spaces.Box):
+			input_size = int(np.prod(obs_space.shape))
 
 		# Actions
-		if isinstance(self.env.action_space, spaces.Discrete):
-			output_size = self.env.action_space.n
+		act_space = self.envs.single_action_space
+		assert isinstance(act_space, spaces.Box) or isinstance(act_space, spaces.Discrete), \
+			"Only Box and Discrete action spaces currently supported"
+
+		output_size = 1
+		output_function = None
+		self.actions_type = "discrete"
+		if isinstance(act_space, spaces.Discrete):
+			output_size = act_space.n
 			output_function = nn.Softmax(dim=-1)
-			self.actions_type = "discrete"
-		else:
-			assert np.prod(self.env.action_space.shape) == 1, "Only single continuous action currently supported"
+		elif isinstance(act_space, spaces.Box):
+			assert np.prod(act_space.shape) == 1, "Only single continuous action currently supported"
 			output_size = 2  # network outputs mean and variance
-			output_function = None
-			self.action_space_bounds = (self.env.action_space.low[0], self.env.action_space.high[0])
+			self.action_space_low, self.action_space_high = act_space.low[0], act_space.high[0]
 			self.actions_type = "continuous"
 
 		actor_config = {
@@ -150,54 +174,60 @@ class A2C(Algorithm):
 		steps = 0
 		episode = 0
 
-		buffer = Buffer(self.t_max, self.env.observation_space.shape, self.device)
+		buffer = Buffer(self.num_envs, self.t_max, self.env.observation_space.shape, self.device)
 
 		print("==== STARTING TRAINING ====")
 
+		obs, _ = self.envs.reset()
+		obs = torch.from_numpy(obs).to(self.device)
+		first_agent_rewards = 0
+
 		while steps <= max_steps:
+			actor_output = self.actor(obs)
+			critic_output = self.critic(obs)  # value function
 
-			current_episode_step = 0
-			ep_rewards = 0
+			if self.actions_type == "discrete":
+				probs = actor_output
+				dist = Categorical(probs=probs)
+				actions = dist.sample()
+				actions_to_input = actions.numpy()
+			else:
+				# actor output is [[mean0, var0],[mean1, var1],...[meanN, varN]]
+				# transposes it so that is becomes [[mean0, mean1, ..., meanN],[var0, var1, ..., varN]]
+				means, log_stds = actor_output.t()
+				dist = Normal(loc=means, scale=log_stds.exp())
+				actions = dist.sample()
+				actions_to_input = self.scale_to_action_space(actions).numpy()
 
-			done = truncated = False
-			new_obs, _ = self.env.reset()
-			obs = torch.from_numpy(new_obs).to(self.device).float()
+			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
+			dones = dones + truncateds  # done or truncated
+			new_obs = torch.from_numpy(new_obs).to(self.device)
 
-			# Collecting data for an episode
+			buffer.push(
+				obs,
+				new_obs,
+				torch.from_numpy(dones).to(self.device).unsqueeze(1),
+				actions.unsqueeze(1),
+				torch.from_numpy(rewards).to(self.device).unsqueeze(1),
+				critic_output,
+				dist.log_prob(actions).unsqueeze(1),
+				dist.entropy().unsqueeze(1),
+			)
 
-			while not (done or truncated):
-				if self.actions_type == "discrete":
-					probs = self.actor(obs)
-					dist = Categorical(probs=probs)
-					action = dist.sample()
-					action_to_input = action.item()
-				else:
-					mean, log_std = self.actor(obs)
-					dist = Normal(loc=mean, scale=log_std.exp())
-					action = dist.sample()
-					action_to_input = self.scale_to_action_space(action).numpy()
-				value = self.critic(obs)
+			obs = new_obs
 
-				new_obs, reward, done, truncated, _ = self.env.step(action_to_input)
-				new_obs = torch.from_numpy(new_obs).to(self.device).float()
+			if buffer.is_full():
+				self.update_networks(buffer)
+				buffer.reset()
 
-				buffer.push(obs, new_obs, done or truncated, action, reward, value, dist.log_prob(action), dist.entropy())
-
-				obs = new_obs
-				ep_rewards += reward
-				current_episode_step += 1
-
-				if buffer.is_full():
-					self.update_networks(buffer)
-					buffer.reset()
-
-			self.rewards.append(ep_rewards)
-
-			if episode % self.log_freq == 0:
-				self.log_rewards(episode=episode, avg_period=10)
-
-			episode += 1
-			steps += current_episode_step
+			first_agent_rewards += rewards[0]
+			if dones[0]:
+				self.rewards.append(first_agent_rewards)
+				first_agent_rewards = 0
+				if episode % self.log_freq == 0:
+					self.log_rewards(episode=episode, avg_period=10)
+				episode += 1
+			steps += 1
 
 		print("==== TRAINING COMPLETE ====")
 
@@ -207,7 +237,7 @@ class A2C(Algorithm):
 				("Actor loss", "Update step", self.actor_losses),
 				("Critic loss", "Update step", self.critic_losses),
 				("Entropy", "Update step", self.entropy),
-			], n=max_steps//1000)
+			], n=max_steps // 1000)
 
 	def update_networks(self, buffer: Buffer) -> None:
 
@@ -215,7 +245,7 @@ class A2C(Algorithm):
 
 		# Computing advantages
 		R = self.critic(next_states[-1])  # next_value
-		returns = torch.zeros((buffer.max_len, 1), device=self.device)
+		returns = torch.zeros((buffer.max_len, self.num_envs, 1), device=self.device)
 
 		for t in reversed(range(buffer.max_len)):
 			R = rewards[t] + self.gamma * R * (1 - dones[t])
@@ -238,7 +268,7 @@ class A2C(Algorithm):
 		self.critic_losses.append(critic_loss.item())
 		self.entropy.append(entropies.mean().item())
 
-	def scale_to_action_space(self, action: tensor) -> tensor:
-		action = torch.tanh(action)
-		action = ((action + 1) / 2) * (self.action_space_bounds[1] - self.action_space_bounds[0]) + self.action_space_bounds[0]
-		return action.unsqueeze(0)
+	def scale_to_action_space(self, actions: tensor) -> tensor:
+		actions = torch.sigmoid(actions)
+		actions = actions * (self.action_space_high - self.action_space_low) + self.action_space_low
+		return actions

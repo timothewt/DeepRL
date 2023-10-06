@@ -16,9 +16,6 @@ class REINFORCE(Algorithm):
 	def __init__(self, config: dict[str | Any]):
 		"""
 		:param config:
-			device: device used by PyTorch
-			env: environment instance
-			log_freq: episodes interval for logging the current stats of the algorithm
 			lr: learning rate
 			gamma: discount factor
 		"""

@@ -259,6 +259,7 @@ class A2C(Algorithm):
 			returns[t] = R
 
 		advantages = returns.detach() - values
+		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)  # TODO : test if works
 
 		# Updating the network
 		actor_loss = - (log_probs * advantages.detach()).mean()

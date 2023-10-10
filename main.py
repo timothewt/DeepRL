@@ -6,7 +6,7 @@ from algorithms.REINFORCE import REINFORCE
 
 
 if __name__ == "__main__":
-	env_name = "CartPole-v1"
+	env_name = "Pendulum-v1"
 
 	algo = A2C(config={
 		"env_name": env_name,
@@ -24,6 +24,6 @@ if __name__ == "__main__":
 		"ent_coef": .01,
 	})
 
-	algo.train(max_steps=25_000, plot_training_stats=True)
+	algo.train(max_steps=30_000, plot_training_stats=True)
 
 	algo.env.close()

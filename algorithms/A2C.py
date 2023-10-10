@@ -8,6 +8,7 @@ from torch import nn, tensor
 from torch.distributions import Categorical, Normal
 
 from algorithms.Algorithm import Algorithm
+from models.ActorContinuous import ActorContinuous
 from models.FCNet import FCNet
 
 
@@ -151,7 +152,10 @@ class A2C(Algorithm):
 			"output_function": output_function,
 		}
 
-		self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
+		if self.actions_type == "continuous":
+			self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
+		else:
+			self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
 		critic_config = {
@@ -186,18 +190,21 @@ class A2C(Algorithm):
 			actor_output = self.actor(obs)
 			critic_output = self.critic(obs)  # value function
 
-			if self.actions_type == "discrete":
+			if self.actions_type == "continuous":
+				means, var = actor_output
+				dist = Normal(loc=means, scale=var)
+				actions = dist.sample()
+				actions_to_input = self.scale_to_action_space(actions).numpy()
+				log_probs = dist.log_prob(actions)
+				entropies = dist.entropy()
+			else:
 				probs = actor_output
 				dist = Categorical(probs=probs)
 				actions = dist.sample()
 				actions_to_input = actions.numpy()
-			else:
-				# actor output is [[mean0, var0],[mean1, var1],...[meanN, varN]]
-				# transposes it so that is becomes [[mean0, mean1, ..., meanN],[var0, var1, ..., varN]]
-				means, pre_stds = actor_output.t()  # pre_stds because it needs SoftPlus and sqrt
-				dist = Normal(loc=means, scale=torch.sqrt(torch.log(1 + pre_stds.exp())))
-				actions = dist.sample()
-				actions_to_input = self.scale_to_action_space(actions).unsqueeze(1).numpy()
+				actions = actions.unsqueeze(1)
+				log_probs = dist.log_prob(actions).unsqueeze(1)
+				entropies = dist.entropy().unsqueeze(1)
 
 			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncated
@@ -207,11 +214,11 @@ class A2C(Algorithm):
 				obs,
 				new_obs,
 				torch.from_numpy(dones).to(self.device).unsqueeze(1),
-				actions.unsqueeze(1),
+				actions,
 				torch.from_numpy(rewards).to(self.device).unsqueeze(1),
 				critic_output,
-				dist.log_prob(actions).unsqueeze(1),
-				dist.entropy().unsqueeze(1),
+				log_probs,
+				entropies,
 			)
 
 			obs = new_obs
@@ -240,7 +247,6 @@ class A2C(Algorithm):
 			], n=max_steps // 1000)
 
 	def update_networks(self, buffer: Buffer) -> None:
-
 		states, next_states, dones, _, rewards, values, log_probs, entropies = buffer.get_all()
 
 		# Computing advantages
@@ -251,7 +257,8 @@ class A2C(Algorithm):
 			R = rewards[t] + self.gamma * R * (1 - dones[t])
 			returns[t] = R
 
-		advantages = returns - values
+		advantages = returns.detach() - values
+		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
 
 		# Updating the network
 		actor_loss = - (log_probs * advantages.detach()).mean()

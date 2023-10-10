@@ -70,7 +70,7 @@ class Algorithm:
 			f"\tAverage reward (last {avg_period} episodes): "
 			f"{round(sum(self.rewards[max(0, episode - avg_period + 1): episode + 1]) / min(episode + 1, avg_period), 1)}")
 
-	def plot_training_stats(self, stats: list[tuple[str | str | list[float]]], n: int = 20) -> None:
+	def plot_training_stats(self, stats: list[tuple[str, str, list[float]]], n: int = 20) -> None:
 		"""
 		:param stats: list of tuples of "y-axis title", "x-axis title", "values"
 		:param n: average interval

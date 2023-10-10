@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Tuple
 
 import numpy as np
 import torch
@@ -61,7 +61,7 @@ class Buffer:
 
 		self.i += 1
 
-	def get(self, index: int = 0) -> tuple[np.ndarray]:
+	def get(self, index: int = 0) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
 		return self.states[index], \
 			self.next_states[index], \
 			self.dones[index], \
@@ -194,14 +194,14 @@ class A2C(Algorithm):
 				means, std = actor_output
 				dist = Normal(loc=means, scale=std)
 				actions = dist.sample()
-				actions_to_input = self.scale_to_action_space(actions).numpy()
+				actions_to_input = self.scale_to_action_space(actions).cpu().numpy()
 				log_probs = dist.log_prob(actions)
 				entropies = dist.entropy()
 			else:
 				probs = actor_output
 				dist = Categorical(probs=probs)
 				actions = dist.sample()
-				actions_to_input = actions.numpy()
+				actions_to_input = actions.cpu().numpy()
 				log_probs = dist.log_prob(actions).unsqueeze(1)
 				actions = actions.unsqueeze(1)
 				entropies = dist.entropy().unsqueeze(1)
@@ -259,7 +259,6 @@ class A2C(Algorithm):
 			returns[t] = R
 
 		advantages = returns.detach() - values
-		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)  # TODO : test if works
 
 		# Updating the network
 		actor_loss = - (log_probs * advantages.detach()).mean()

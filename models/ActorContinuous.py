@@ -24,7 +24,7 @@ class ActorContinuous(nn.Module):
 		self.mean_layer = nn.Sequential(
 			nn.ReLU(),
 			nn.Linear(128, 1),
-			nn.Tanh(),
+			nn.Sigmoid(),
 		)
 
 		self.var_layer = nn.Sequential(

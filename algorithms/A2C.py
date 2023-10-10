@@ -276,6 +276,6 @@ class A2C(Algorithm):
 		self.entropy.append(entropies.mean().item())
 
 	def scale_to_action_space(self, actions: tensor) -> tensor:
-		actions = torch.sigmoid(actions)
+		actions = torch.clamp(actions, 0, 1)
 		actions = actions * (self.action_space_high - self.action_space_low) + self.action_space_low
 		return actions

@@ -27,7 +27,7 @@ class ActorContinuous(nn.Module):
 			nn.Sigmoid(),
 		)
 
-		self.var_layer = nn.Sequential(
+		self.std_layer = nn.Sequential(
 			nn.ReLU(),
 			nn.Linear(128, 1),
 			nn.Softplus(),
@@ -35,7 +35,7 @@ class ActorContinuous(nn.Module):
 
 	def forward(self, x):
 		x = self.fc(x)
-		means, vars = self.mean_layer(x), self.var_layer(x)
-		return means, vars
+		means, stds = self.mean_layer(x), self.std_layer(x)
+		return means, stds
 
 

@@ -16,7 +16,7 @@ if __name__ == "__main__":
 		"actor_hidden_size": 64,
 		"critic_hidden_layers_nb": 2,
 		"critic_hidden_size": 64,
-		"gamma": .99,
+		"gamma": .999,
 		"actor_lr": .0003,
 		"critic_lr": .001,
 		"log_freq": 10,
@@ -24,6 +24,6 @@ if __name__ == "__main__":
 		"ent_coef": .01,
 	})
 
-	algo.train(max_steps=30_000, plot_training_stats=True)
+	algo.train(max_steps=25_000, plot_training_stats=True)
 
 	algo.env.close()

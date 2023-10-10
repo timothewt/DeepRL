@@ -191,8 +191,8 @@ class A2C(Algorithm):
 			critic_output = self.critic(obs)  # value function
 
 			if self.actions_type == "continuous":
-				means, var = actor_output
-				dist = Normal(loc=means, scale=var)
+				means, std = actor_output
+				dist = Normal(loc=means, scale=std)
 				actions = dist.sample()
 				actions_to_input = self.scale_to_action_space(actions).numpy()
 				log_probs = dist.log_prob(actions)
@@ -202,12 +202,12 @@ class A2C(Algorithm):
 				dist = Categorical(probs=probs)
 				actions = dist.sample()
 				actions_to_input = actions.numpy()
-				actions = actions.unsqueeze(1)
 				log_probs = dist.log_prob(actions).unsqueeze(1)
+				actions = actions.unsqueeze(1)
 				entropies = dist.entropy().unsqueeze(1)
 
 			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
-			dones = dones + truncateds  # done or truncated
+			dones = dones + truncateds  # done or truncate
 			new_obs = torch.from_numpy(new_obs).to(self.device)
 
 			buffer.push(
@@ -247,6 +247,7 @@ class A2C(Algorithm):
 			], n=max_steps // 1000)
 
 	def update_networks(self, buffer: Buffer) -> None:
+
 		states, next_states, dones, _, rewards, values, log_probs, entropies = buffer.get_all()
 
 		# Computing advantages
@@ -258,7 +259,6 @@ class A2C(Algorithm):
 			returns[t] = R
 
 		advantages = returns.detach() - values
-		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
 
 		# Updating the network
 		actor_loss = - (log_probs * advantages.detach()).mean()

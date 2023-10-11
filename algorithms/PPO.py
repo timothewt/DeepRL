@@ -120,6 +120,7 @@ class PPO(Algorithm):
 		self.minibatch_nb_per_batch = self.batch_size // self.minibatch_size
 
 		self.mse = nn.MSELoss()
+		self.grad_clip = .5
 
 		# Policy
 
@@ -258,7 +259,6 @@ class PPO(Algorithm):
 		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 		returns = advantages + values
 
-
 		for _ in range(self.num_epochs):
 			indices = torch.randperm(self.batch_size)
 			for m in range(self.minibatch_nb_per_batch):
@@ -268,7 +268,9 @@ class PPO(Algorithm):
 
 				actor_output = self.actor(states[minibatch_indices])
 				if self.actions_type == "continuous":
-					raise NotImplementedError
+					means, stds = actor_output
+					means, stds = means.view(self.minibatch_size), stds.view(self.minibatch_size)
+					new_dist = Normal(loc=means, scale=stds)
 				else:
 					new_dist = Categorical(probs=actor_output)
 
@@ -288,6 +290,8 @@ class PPO(Algorithm):
 				self.actor_optimizer.zero_grad()
 				self.critic_optimizer.zero_grad()
 				(- L_clip + self.vf_coef * L_vf - self.ent_coef * L_S).backward()
+				# nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_clip)
+				# nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_clip)
 				self.actor_optimizer.step()
 				self.critic_optimizer.step()
 

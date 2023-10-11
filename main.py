@@ -27,6 +27,6 @@ if __name__ == "__main__":
 		"log_freq": 10,
 	})
 
-	algo.train(max_steps=50_000, plot_training_stats=True)
+	algo.train(max_steps=25_000, plot_training_stats=True)
 
 	algo.env.close()

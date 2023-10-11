@@ -1,7 +1,9 @@
 from typing import Any
 
+from numpy import sqrt
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.init
 
 
 class FCNet(nn.Module):
@@ -26,14 +28,20 @@ class FCNet(nn.Module):
 		output_function = config.get("output_function", None)
 
 		self.fc = nn.ModuleList(
-			[nn.Linear(input_size, hidden_size)] +
-			[nn.Linear(hidden_size, hidden_size) for _ in range(hidden_layers_nb)] +
-			[nn.Linear(hidden_size, output_size)]
+			[self.layer_init(nn.Linear(input_size, hidden_size), sqrt(2))] +
+			[self.layer_init(nn.Linear(hidden_size, hidden_size), sqrt(2)) for _ in range(hidden_layers_nb)] +
+			[self.layer_init(nn.Linear(hidden_size, output_size), config.get("output_layer_std", .01))]
 		)
 		self.activation_function = activation_function
 		if output_function is None:
 			def output_function(x): return x
 		self.output_function = output_function
+
+	@staticmethod
+	def layer_init(layer, std) -> nn.Module:
+		torch.nn.init.orthogonal_(layer.weight, std)
+		layer.bias.data.fill_(0.)
+		return layer
 
 	def forward(self, x):
 		for layer in self.fc[:-1]:

@@ -158,6 +158,7 @@ class PPO(Algorithm):
 			"hidden_layers_nb": config.get("actor_hidden_layers_nb", 3),
 			"hidden_size": config.get("actor_hidden_size", 32),
 			"output_function": output_function,
+			"output_layer_std": .01,
 		}
 
 		if self.actions_type == "continuous":
@@ -171,6 +172,7 @@ class PPO(Algorithm):
 			"output_size": 1,
 			"hidden_layers_nb": config.get("critic_hidden_layers_nb", 3),
 			"hidden_size": config.get("critic_hidden_size", 32),
+			"output_layer_std": 1,
 		}
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
 		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)

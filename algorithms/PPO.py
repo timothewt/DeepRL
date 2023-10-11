@@ -27,9 +27,9 @@ class Buffer:
 		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
 		self.values = torch.empty((max_len, num_envs, 1), device=device)
 		self.log_probs = torch.empty((max_len, num_envs, 1), device=device)
-		self.entropies = torch.empty((max_len, num_envs, 1), device=device)
 
 		self.num_envs = num_envs
+		self.state_shape = state_shape
 		self.max_len = max_len
 		self.device = device
 		self.i = 0
@@ -39,14 +39,13 @@ class Buffer:
 
 	def push(
 			self,
-			states: np.ndarray,
-			next_states: np.ndarray,
-			dones: bool,
-			actions: int,
-			rewards: float,
-			values: float,
-			log_probs: float,
-			entropies: float
+			states: tensor,
+			next_states: tensor,
+			dones: tensor,
+			actions: tensor,
+			rewards: tensor,
+			values: tensor,
+			log_probs: tensor
 	) -> None:
 		assert self.i < self.max_len, "Buffer is full!"
 
@@ -57,21 +56,28 @@ class Buffer:
 		self.rewards[self.i] = rewards
 		self.values[self.i] = values
 		self.log_probs[self.i] = log_probs
-		self.entropies[self.i] = entropies
 
 		self.i += 1
 
-	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
-		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs, self.entropies
+	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs
+
+	def get_all_flattened(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+		return self.states.view((self.max_len * self.num_envs,) + self.state_shape),\
+			self.next_states.view((self.max_len * self.num_envs,) + self.state_shape),\
+			self.dones.flatten(),\
+			self.actions.flatten(),\
+			self.rewards.flatten(),\
+			self.values.flatten(),\
+			self.log_probs.flatten()
 
 	def reset(self) -> None:
 		self.values = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
 		self.log_probs = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
-		self.entropies = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
 		self.i = 0
 
 
-class A2C(Algorithm):
+class PPO(Algorithm):
 
 	def __init__(self, config: dict[str | Any]):
 		"""
@@ -80,7 +86,7 @@ class A2C(Algorithm):
 			actor_lr: learning rate of the actor
 			critic_lr: learning rate of the critic
 			gamma: discount factor
-			t_max: steps between each updates
+			horizon: steps between each updates
 		"""
 		super().__init__(config=config)
 
@@ -100,9 +106,20 @@ class A2C(Algorithm):
 		self.actor_lr: float = config.get("actor_lr", .0002)
 		self.critic_lr: float = config.get("critic_lr", .0002)
 		self.gamma: float = config.get("gamma", .99)
-		self.t_max: int = config.get("t_max", 5)
+		self.lam: float = config.get("lambda", .95)
+		self.horizon: int = config.get("horizon", 5)
+		self.num_epochs: int = config.get("num_epochs", 5)
 		self.ent_coef: float = config.get("ent_coef", .001)
 		self.vf_coef = config.get("vf_coef", .5)
+		self.eps = config.get("eps", .2)
+
+		self.batch_size = self.horizon * self.num_envs
+		self.minibatch_size = config.get("minibatch_size", self.batch_size)
+		assert self.batch_size % self.minibatch_size == 0,\
+			"Batch size (num_envs * horizon) must be a multiple of mini-batch size!"
+		self.minibatch_nb_per_batch = self.batch_size // self.minibatch_size
+
+		self.mse = nn.MSELoss()
 
 		# Policy
 
@@ -158,7 +175,7 @@ class A2C(Algorithm):
 		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
 	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
-		# From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
+		# From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 
 		self.rewards = []
 		self.actor_losses = []
@@ -168,7 +185,7 @@ class A2C(Algorithm):
 		steps = 0
 		episode = 0
 
-		buffer = Buffer(self.num_envs, self.t_max, self.env.observation_space.shape, self.device)
+		buffer = Buffer(self.num_envs, self.horizon, self.env.observation_space.shape, self.device)
 
 		print("==== STARTING TRAINING ====")
 
@@ -184,9 +201,8 @@ class A2C(Algorithm):
 				means, std = actor_output
 				dist = Normal(loc=means, scale=std)
 				actions = dist.sample()
-				actions_to_input = self.scale_to_action_space(actions).cpu().numpy()
+				actions_to_input = self._scale_to_action_space(actions).cpu().numpy()
 				log_probs = dist.log_prob(actions)
-				entropies = dist.entropy()
 			else:
 				probs = actor_output
 				dist = Categorical(probs=probs)
@@ -194,7 +210,6 @@ class A2C(Algorithm):
 				actions_to_input = actions.cpu().numpy()
 				log_probs = dist.log_prob(actions).unsqueeze(1)
 				actions = actions.unsqueeze(1)
-				entropies = dist.entropy().unsqueeze(1)
 
 			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
@@ -208,13 +223,12 @@ class A2C(Algorithm):
 				torch.from_numpy(rewards).to(self.device).unsqueeze(1),
 				critic_output,
 				log_probs,
-				entropies,
 			)
 
 			obs = new_obs
 
 			if buffer.is_full():
-				self.update_networks(buffer)
+				self._update_networks(buffer)
 				buffer.reset()
 
 			first_agent_rewards += rewards[0]
@@ -236,36 +250,69 @@ class A2C(Algorithm):
 				("Entropy", "Update step", self.entropy),
 			], n=max_steps // 1000)
 
-	def update_networks(self, buffer: Buffer) -> None:
+	def _update_networks(self, buffer: Buffer) -> None:
+		states, _, _, actions, rewards, values, old_log_probs = buffer.get_all_flattened()
+		values, old_log_probs = values.detach(), old_log_probs.detach()
 
-		states, next_states, dones, _, rewards, values, log_probs, entropies = buffer.get_all()
+		advantages = self._compute_advantages(buffer, self.gamma, self.lam).flatten()
+		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+		returns = advantages + values
 
-		# Computing advantages
-		R = self.critic(next_states[-1])  # next_value
-		returns = torch.zeros((buffer.max_len, self.num_envs, 1), device=self.device)
 
+		for _ in range(self.num_epochs):
+			indices = torch.randperm(self.batch_size)
+			for m in range(self.minibatch_nb_per_batch):
+				start = m * self.minibatch_size
+				end = start + self.minibatch_size
+				minibatch_indices = indices[start:end]
+
+				actor_output = self.actor(states[minibatch_indices])
+				if self.actions_type == "continuous":
+					raise NotImplementedError
+				else:
+					new_dist = Categorical(probs=actor_output)
+
+				new_log_probs = new_dist.log_prob(actions[minibatch_indices])
+				new_entropy = new_dist.entropy()
+				new_values = self.critic(states[minibatch_indices])
+
+				r = torch.exp(new_log_probs - old_log_probs[minibatch_indices])
+				L_clip = torch.min(
+					r * advantages[minibatch_indices],
+					torch.clamp(r, 1 - self.eps, 1 + self.eps) * advantages[minibatch_indices]
+				).mean()
+				L_vf = self.mse(new_values.squeeze(1), returns[minibatch_indices])
+				L_S = new_entropy.mean()
+
+				# Updating the network
+				self.actor_optimizer.zero_grad()
+				self.critic_optimizer.zero_grad()
+				(- L_clip + self.vf_coef * L_vf - self.ent_coef * L_S).backward()
+				self.actor_optimizer.step()
+				self.critic_optimizer.step()
+
+				self.actor_losses.append(L_clip.item())
+				self.critic_losses.append(L_vf.item())
+				self.entropy.append(L_S.item())
+
+	def _compute_advantages(self, buffer: Buffer, gamma: float, lam: float) -> tensor:
+		_, next_states, dones, _, rewards, values, _ = buffer.get_all()
+
+		next_values = values.roll(-1, dims=0)
+		next_values[-1] = self.critic(next_states[-1])
+
+		deltas = (rewards + gamma * next_values - values).detach()
+
+		advantages = torch.zeros(deltas.shape, device=self.device)
+		last_advantage = advantages[-1]
+		next_step_terminates = dones[-1]  # should be the dones of the next step however cannot reach it
 		for t in reversed(range(buffer.max_len)):
-			R = rewards[t] + self.gamma * R * (1 - dones[t])
-			returns[t] = R
+			advantages[t] = last_advantage = deltas[t] + gamma * lam * last_advantage * (1 - next_step_terminates)
+			next_step_terminates = dones[t]
 
-		advantages = returns.detach() - values
+		return advantages
 
-		# Updating the network
-		actor_loss = - (log_probs * advantages.detach()).mean()
-		critic_loss = advantages.pow(2).mean()
-		entropy_loss = entropies.mean()
-
-		self.actor_optimizer.zero_grad()
-		self.critic_optimizer.zero_grad()
-		(actor_loss + self.vf_coef * critic_loss - self.ent_coef * entropy_loss).backward()
-		self.actor_optimizer.step()
-		self.critic_optimizer.step()
-
-		self.actor_losses.append(actor_loss.item())
-		self.critic_losses.append(critic_loss.item())
-		self.entropy.append(entropies.mean().item())
-
-	def scale_to_action_space(self, actions: tensor) -> tensor:
+	def _scale_to_action_space(self, actions: tensor) -> tensor:
 		actions = torch.clamp(actions, 0, 1)
 		actions = actions * (self.action_space_high - self.action_space_low) + self.action_space_low
 		return actions

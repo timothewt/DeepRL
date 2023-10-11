@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gymnasium import spaces
-from torch import tensor
 from torch.distributions import Categorical
 
 from algorithms.Algorithm import Algorithm

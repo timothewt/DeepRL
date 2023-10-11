@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from gymnasium import spaces
 from torch import tensor, nn as nn
-import gymnasium as gym
-import numpy as np
 
 from algorithms.Algorithm import Algorithm
 from models.FCNet import FCNet
@@ -24,7 +22,7 @@ class ReplayMemory:
 		self.current_length = 0
 		self.i = 0
 
-	def push(self, state, action, reward, next_state, is_terminal) -> ReplayMemory:
+	def push(self, state, action, reward, next_state, is_terminal) -> None:
 		self.i %= self.max_length
 		self.current_length = min(self.current_length + 1, self.max_length)
 

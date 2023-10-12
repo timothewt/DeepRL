@@ -1,5 +1,6 @@
 from typing import Any
 
+import torch
 import torch.nn as nn
 from models.FCNet import FCNet
 
@@ -12,30 +13,20 @@ class ActorContinuous(nn.Module):
 			input_size: number of inputs of the neural net
 			hidden_layers_nb: number of layers between the input and output layers
 			hidden_size: size of the hidden layers
-			activation_function: activation function used between the layers
 		"""
 		super(ActorContinuous, self).__init__()
 
-		config["output_size"] = 128
-		config["output_function"] = None
+		config["output_size"] = 1
+		config["output_function"] = nn.Sigmoid()
 
-		self.fc = FCNet(config)
+		self.mean_net = FCNet(config)
 
-		self.mean_layer = nn.Sequential(
-			nn.ReLU(),
-			nn.Linear(128, 1),
-			nn.Sigmoid(),
-		)
-
-		self.std_layer = nn.Sequential(
-			nn.ReLU(),
-			nn.Linear(128, 1),
-			nn.Softplus(),
-		)
+		self.log_std = nn.Parameter(torch.zeros(1))
 
 	def forward(self, x):
-		x = self.fc(x)
-		means, stds = self.mean_layer(x), self.std_layer(x)
+		means = self.mean_net(x)
+		log_stds = self.log_std.expand_as(means)
+		stds = torch.exp(log_stds)
 		return means, stds
 
 

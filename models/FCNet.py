@@ -28,8 +28,8 @@ class FCNet(nn.Module):
 		output_function = config.get("output_function", None)
 
 		self.fc = nn.ModuleList(
-			[self.layer_init(nn.Linear(input_size, hidden_size), sqrt(2))] +
-			[self.layer_init(nn.Linear(hidden_size, hidden_size), sqrt(2)) for _ in range(hidden_layers_nb)] +
+			[self.layer_init(nn.Linear(input_size, hidden_size))] +
+			[self.layer_init(nn.Linear(hidden_size, hidden_size)) for _ in range(hidden_layers_nb)] +
 			[self.layer_init(nn.Linear(hidden_size, output_size), config.get("output_layer_std", .01))]
 		)
 		self.activation_function = activation_function
@@ -38,9 +38,9 @@ class FCNet(nn.Module):
 		self.output_function = output_function
 
 	@staticmethod
-	def layer_init(layer, std) -> nn.Module:
+	def layer_init(layer: nn.Module, std: float = sqrt(2), bias_const: float = 0.) -> nn.Module:
 		torch.nn.init.orthogonal_(layer.weight, std)
-		layer.bias.data.fill_(0.)
+		torch.nn.init.constant_(layer.bias, bias_const)
 		return layer
 
 	def forward(self, x):

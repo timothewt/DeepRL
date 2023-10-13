@@ -158,7 +158,9 @@ class PPO(Algorithm):
 			self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
 		elif isinstance(self.env_act_space, spaces.Box):
 			self.actions_type = "continuous"
-			self.action_space_low, self.action_space_high = self.env_act_space.low, self.env_act_space.high
+			self.action_space_low = torch.from_numpy(self.env_act_space.low).to(self.device)
+			self.action_space_high = torch.from_numpy(self.env_act_space.high).to(self.device)
+			self.action_space_intervals = (self.action_space_high - self.action_space_low)
 			actor_config["actions_nb"] = self.actions_nb = int(np.prod(self.env_act_space.shape))
 			self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
 		else:
@@ -321,5 +323,5 @@ class PPO(Algorithm):
 
 	def _scale_to_action_space(self, actions: tensor) -> tensor:
 		actions = torch.clamp(actions, 0, 1)
-		actions = actions * (self.action_space_high - self.action_space_low) + self.action_space_low
+		actions = actions * self.action_space_intervals + self.action_space_low
 		return actions

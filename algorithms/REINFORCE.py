@@ -3,6 +3,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+import gymnasium as gym
 from gymnasium import spaces
 from torch.distributions import Categorical
 
@@ -15,11 +16,21 @@ class REINFORCE(Algorithm):
 	def __init__(self, config: dict[str | Any]):
 		"""
 		:param config:
-			lr: learning rate
-			gamma: discount factor
+			env_name (str) : name of the environment in the Gym registry
+			lr (float): learning rate
+			gamma (float): discount factor
 		"""
-
 		super().__init__(config=config)
+
+		# Device
+
+		self.device = config.get("device", torch.device("cpu"))
+
+		# Environment
+
+		assert config.get("env_name", None) is not None, "No environment provided!"
+		self.env: gym.Env = gym.make(config.get("env_name", None))
+		self.max_episode_steps = self.env.spec.max_episode_steps
 
 		# Algorithm hyperparameters
 
@@ -28,14 +39,14 @@ class REINFORCE(Algorithm):
 
 		# Policy
 
+		assert isinstance(self.env.action_space, spaces.Discrete), "Only discrete action spaces are currently supported"
 		assert isinstance(self.env.observation_space, spaces.Box) or \
 			isinstance(self.env.observation_space, spaces.Discrete),\
-			"Only Box and Discrete spaces currently supported"
+			"Only Box and Discrete observation spaces currently supported"
 
-		input_size = 0
 		if isinstance(self.env.observation_space, spaces.Box):
 			input_size = int(np.prod(self.env.observation_space.shape))
-		elif isinstance(self.env.observation_space, spaces.Discrete):
+		else:
 			input_size = self.env.observation_space.n
 
 		policy_config = {
@@ -46,10 +57,15 @@ class REINFORCE(Algorithm):
 			"output_function": nn.Softmax(dim=-1),
 		}
 		self.policy_network: nn.Module = FCNet(config=policy_config).to(self.device)
-
 		self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=self.lr)
 
-	def train(self, max_steps: int) -> None:
+		# Training stats
+
+		self.rewards = []
+		self.losses = []
+		self.log_freq = config.get("log_freq", 50)
+
+	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
 
 		self.rewards = []
 		self.losses = []
@@ -109,7 +125,7 @@ class REINFORCE(Algorithm):
 			self.losses[episode] = loss.item()
 
 			if episode % self.log_freq == 0:
-				self.log_rewards(episode=episode, avg_period=10)
+				self.log_rewards(rewards=self.rewards, episode=episode, avg_period=10)
 
 			episode += 1
 			steps += current_episode_step

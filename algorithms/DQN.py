@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -45,8 +46,17 @@ class ReplayMemory:
 class DQN(Algorithm):
 
 	def __init__(self, config: dict):
+		super().__init__(config)
 
-		super().__init__(config=config)
+		# Device
+
+		self.device = config.get("device", torch.device("cpu"))
+
+		# Environment
+
+		self.env: gym.Env = gym.make(config.get("env_name", None))
+		assert self.env is not None, "No environment provided!"
+		self.max_episode_steps = self.env.spec.max_episode_steps
 
 		# Algorithm hyperparameters
 
@@ -62,16 +72,14 @@ class DQN(Algorithm):
 
 		# Policies
 
-		self.policy_model: type[nn.Module] = config.get("policy_model", None)
-		assert self.policy_model is not None, "No policy architecture provided!"
-
-		assert isinstance(self.env.observation_space, spaces.Box) or isinstance(self.env.observation_space, spaces.Discrete),\
+		assert isinstance(self.env.action_space, spaces.Discrete), "Only discrete action spaces are supported"
+		assert isinstance(self.env.observation_space, spaces.Box) or \
+			isinstance(self.env.observation_space, spaces.Discrete),\
 			"Only Box and Discrete spaces currently supported"
 
-		input_size = 0
 		if isinstance(self.env.observation_space, spaces.Box):
 			input_size = int(np.prod(self.env.observation_space.shape))
-		elif isinstance(self.env.observation_space, spaces.Discrete):
+		else:
 			input_size = self.env.observation_space.n
 
 		policy_config = {
@@ -88,10 +96,12 @@ class DQN(Algorithm):
 		self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=self.lr)
 		self.loss_fn: nn.MSELoss = nn.MSELoss()
 
+		# Training stats
 		self.rewards = []
 		self.losses = []
+		self.log_freq = config.get("log_freq", 50)
 
-	def train(self, max_steps: int) -> None:
+	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
 
 		self.rewards = []
 		self.losses = []

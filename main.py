@@ -7,26 +7,26 @@ from algorithms.REINFORCE import REINFORCE
 
 
 if __name__ == "__main__":
-	env_name = "BipedalWalker-v3"
+	env_name = "CartPole-v1"
 
 	algo = PPO(config={
 		"env_name": env_name,
 		"num_envs": 16,
 		# "device": device("cuda:0" if cuda.is_available() else "cpu"),
-		"actor_hidden_layers_nb": 3,
-		"actor_hidden_size": 128,
-		"critic_hidden_layers_nb": 3,
-		"critic_hidden_size": 128,
+		"actor_hidden_layers_nb": 2,
+		"actor_hidden_size": 64,
+		"critic_hidden_layers_nb": 2,
+		"critic_hidden_size": 64,
 		"gamma": .999,
 		"gae_lambda": .95,
 		"actor_lr": .00015,
 		"critic_lr": .0005,
-		"horizon": 1024,
-		"ent_coef": .005,
-		"minibatch_size": 64,
+		"horizon": 128,
+		"ent_coef": .01,
+		"minibatch_size": 16,
 		"log_freq": 20,
 	})
 
-	algo.train(max_steps=300_000, plot_training_stats=True)
+	algo.train(max_steps=20_000, plot_training_stats=True)
 
-	algo.env.close()
+	algo.envs.close()

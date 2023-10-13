@@ -84,6 +84,10 @@ class A2C(Algorithm):
 		"""
 		super().__init__(config=config)
 
+		# Device
+
+		self.device = config.get("device", torch.device("cpu"))
+
 		# Vectorized envs
 
 		self.num_envs = max(config.get("num_envs", 1), 1)
@@ -94,6 +98,7 @@ class A2C(Algorithm):
 		self.actor_losses = []
 		self.critic_losses = []
 		self.entropy = []
+		self.log_freq = config.get("log_freq", 10)
 
 		# Algorithm hyperparameters
 
@@ -168,7 +173,7 @@ class A2C(Algorithm):
 		steps = 0
 		episode = 0
 
-		buffer = Buffer(self.num_envs, self.t_max, self.env.observation_space.shape, self.device)
+		buffer = Buffer(self.num_envs, self.t_max, self.envs.single_observation_space.shape, self.device)
 
 		print("==== STARTING TRAINING ====")
 
@@ -222,7 +227,7 @@ class A2C(Algorithm):
 				self.rewards.append(first_agent_rewards)
 				first_agent_rewards = 0
 				if episode % self.log_freq == 0:
-					self.log_rewards(episode=episode, avg_period=10)
+					self.log_rewards(rewards=self.rewards, episode=episode, avg_period=10)
 				episode += 1
 			steps += 1
 

@@ -94,11 +94,15 @@ class PPO(Algorithm):
 			vf_coef (float) : value function loss coefficient
 			eps (float) : epsilon clip value
 			minibatch_size (float) : size of the mini-batches used to update the policy
-			log_freq (int): episodes nb interval at which a log is given
 			use_grad_clip (bool) : boolean telling if gradient clipping is used
 			grad_clip (float) : value at which the gradients will be clipped
+			log_freq (int): episodes nb interval at which a log is given
 		"""
 		super().__init__(config=config)
+
+		# Device
+
+		self.device = config.get("device", torch.device("cpu"))
 
 		# Vectorized envs
 
@@ -114,6 +118,7 @@ class PPO(Algorithm):
 		self.actor_losses = []
 		self.critic_losses = []
 		self.entropy = []
+		self.log_freq = config.get("log_freq", 10)
 
 		# Algorithm hyperparameters
 
@@ -189,7 +194,7 @@ class PPO(Algorithm):
 		steps = 0
 		episode = 0
 
-		buffer = Buffer(self.num_envs, self.horizon, self.env.observation_space.shape, self.actions_nb, self.device)
+		buffer = Buffer(self.num_envs, self.horizon, self.envs.single_observation_space.shape, self.actions_nb, self.device)
 
 		print("==== STARTING TRAINING ====")
 
@@ -240,7 +245,7 @@ class PPO(Algorithm):
 				self.rewards.append(first_agent_rewards)
 				first_agent_rewards = 0
 				if episode % self.log_freq == 0:
-					self.log_rewards(episode=episode, avg_period=10)
+					self.log_rewards(rewards=self.rewards, episode=episode, avg_period=10)
 				episode += 1
 			steps += 1
 

@@ -11,7 +11,7 @@ if __name__ == "__main__":
 
 	algo = PPO(config={
 		"env_name": env_name,
-		"num_envs": 8,
+		"num_envs": 16,
 		# "device": device("cuda:0" if cuda.is_available() else "cpu"),
 		"actor_hidden_layers_nb": 3,
 		"actor_hidden_size": 128,
@@ -21,12 +21,12 @@ if __name__ == "__main__":
 		"gae_lambda": .95,
 		"actor_lr": .00015,
 		"critic_lr": .0005,
-		"horizon": 2048,
+		"horizon": 1024,
 		"ent_coef": .005,
 		"minibatch_size": 64,
 		"log_freq": 20,
 	})
 
-	algo.train(max_steps=400_000, plot_training_stats=True)
+	algo.train(max_steps=300_000, plot_training_stats=True)
 
 	algo.env.close()

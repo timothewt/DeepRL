@@ -16,16 +16,17 @@ class ActorContinuous(nn.Module):
 		"""
 		super(ActorContinuous, self).__init__()
 
-		config["output_size"] = 1
+		self.actions_nb = config.get("actions_nb", 1)
+		config["output_size"] = self.actions_nb
 		config["output_function"] = nn.Sigmoid()
 
-		self.mean_net = FCNet(config)
+		self.means_net = FCNet(config)
 
-		self.log_std = nn.Parameter(torch.zeros(1))
+		self.log_stds = nn.Parameter(torch.zeros(1, self.actions_nb))
 
 	def forward(self, x):
-		means = self.mean_net(x)
-		log_stds = self.log_std.expand_as(means)
+		means = self.means_net(x)
+		log_stds = self.log_stds.expand_as(means)
 		stds = torch.exp(log_stds)
 		return means, stds
 

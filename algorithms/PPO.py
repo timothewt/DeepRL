@@ -18,15 +18,16 @@ class Buffer:
 			num_envs: int,
 			max_len: int = 5,
 			state_shape: tuple[int] = (1,),
+			actions_nb: int = 1,
 			device: torch.device = torch.device("cpu"),
 	):
 		self.states = torch.empty((max_len, num_envs) + state_shape, device=device)
 		self.next_states = torch.empty((max_len, num_envs) + state_shape, device=device)
 		self.dones = torch.empty((max_len, num_envs, 1), device=device)
-		self.actions = torch.empty((max_len, num_envs, 1), device=device)
+		self.actions = torch.empty((max_len, num_envs, actions_nb), device=device)
 		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
 		self.values = torch.empty((max_len, num_envs, 1), device=device)
-		self.log_probs = torch.empty((max_len, num_envs, 1), device=device)
+		self.log_probs = torch.empty((max_len, num_envs, actions_nb), device=device)
 
 		self.num_envs = num_envs
 		self.state_shape = state_shape
@@ -66,14 +67,12 @@ class Buffer:
 		return self.states.view((self.max_len * self.num_envs,) + self.state_shape), \
 			self.next_states.view((self.max_len * self.num_envs,) + self.state_shape), \
 			self.dones.flatten(), \
-			self.actions.flatten(), \
+			self.actions.flatten(end_dim=1), \
 			self.rewards.flatten(), \
 			self.values.flatten(), \
-			self.log_probs.flatten()
+			self.log_probs.flatten(end_dim=1)
 
 	def reset(self) -> None:
-		self.values = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
-		self.log_probs = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
 		self.i = 0
 
 
@@ -88,7 +87,7 @@ class PPO(Algorithm):
 			actor_lr (float) : learning rate of the actor
 			critic_lr (float) : learning rate of the critic
 			gamma (float) : discount factor
-			lambda (float) : GAE parameter
+			gae_lambda (float) : GAE parameter
 			horizon (int) : steps number between each update
 			num_epochs (int) : number of epochs during the policy updates
 			ent_coef (float) : entropy bonus coefficient
@@ -121,7 +120,7 @@ class PPO(Algorithm):
 		self.actor_lr: float = config.get("actor_lr", .0001)
 		self.critic_lr: float = config.get("critic_lr", .0005)
 		self.gamma: float = config.get("gamma", .99)
-		self.lam: float = config.get("lambda", .95)
+		self.gae_lambda: float = config.get("gae_lambda", .95)
 		self.horizon: int = config.get("horizon", 5)
 		self.num_epochs: int = config.get("num_epochs", 5)
 		self.ent_coef: float = config.get("ent_coef", .01)
@@ -141,11 +140,12 @@ class PPO(Algorithm):
 		# Policies
 
 		self.env_obs_space = self.envs.single_observation_space
-		self.flat_env_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
+		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
 		self.env_act_space = self.envs.single_action_space
+		self.actions_nb = 1
 
 		actor_config = {
-			"input_size": int(np.prod(self.flat_env_obs_space.shape)),
+			"input_size": int(np.prod(self.env_flat_obs_space.shape)),
 			"hidden_layers_nb": config.get("actor_hidden_layers_nb", 3),
 			"hidden_size": config.get("actor_hidden_size", 64),
 			"output_layer_std": .01,
@@ -158,7 +158,8 @@ class PPO(Algorithm):
 			self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
 		elif isinstance(self.env_act_space, spaces.Box):
 			self.actions_type = "continuous"
-			self.action_space_low, self.action_space_high = self.env_act_space.low[0], self.env_act_space.high[0]
+			self.action_space_low, self.action_space_high = self.env_act_space.low, self.env_act_space.high
+			actor_config["actions_nb"] = self.actions_nb = int(np.prod(self.env_act_space.shape))
 			self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
 		else:
 			raise NotImplementedError("Only Discrete or Box action spaces currently supported.")
@@ -166,7 +167,7 @@ class PPO(Algorithm):
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
 		critic_config = {
-			"input_size": int(np.prod(self.flat_env_obs_space.shape)),
+			"input_size": int(np.prod(self.env_flat_obs_space.shape)),
 			"output_size": 1,
 			"hidden_layers_nb": config.get("critic_hidden_layers_nb", 3),
 			"hidden_size": config.get("critic_hidden_size", 64),
@@ -186,7 +187,7 @@ class PPO(Algorithm):
 		steps = 0
 		episode = 0
 
-		buffer = Buffer(self.num_envs, self.horizon, self.env.observation_space.shape, self.device)
+		buffer = Buffer(self.num_envs, self.horizon, self.env.observation_space.shape, self.actions_nb, self.device)
 
 		print("==== STARTING TRAINING ====")
 
@@ -253,9 +254,11 @@ class PPO(Algorithm):
 
 	def _update_networks(self, buffer: Buffer) -> None:
 		states, _, _, actions, rewards, values, old_log_probs = buffer.get_all_flattened()
-		values, old_log_probs = values.detach(), old_log_probs.detach()
+		values, old_log_probs = values.detach().view(self.batch_size, 1), old_log_probs.detach()
+		if self.actions_type == "discrete":
+			actions = actions.view(self.batch_size)
 
-		advantages = self._compute_advantages(buffer, self.gamma, self.lam).flatten()
+		advantages = self._compute_advantages(buffer, self.gamma, self.gae_lambda).flatten(end_dim=1)
 		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 		returns = advantages + values
 
@@ -269,12 +272,11 @@ class PPO(Algorithm):
 				actor_output = self.actor(states[minibatch_indices])
 				if self.actions_type == "continuous":
 					means, stds = actor_output
-					means, stds = means.view(self.minibatch_size), stds.view(self.minibatch_size)
 					new_dist = Normal(loc=means, scale=stds)
 				else:
 					new_dist = Categorical(probs=actor_output)
 
-				new_log_probs = new_dist.log_prob(actions[minibatch_indices])
+				new_log_probs = new_dist.log_prob(actions[minibatch_indices]).view(self.minibatch_size, self.actions_nb)
 				new_entropy = new_dist.entropy()
 				new_values = self.critic(states[minibatch_indices])
 
@@ -283,7 +285,7 @@ class PPO(Algorithm):
 					r * advantages[minibatch_indices],
 					torch.clamp(r, 1 - self.eps, 1 + self.eps) * advantages[minibatch_indices]
 				).mean()
-				L_vf = self.mse(new_values.squeeze(1), returns[minibatch_indices])
+				L_vf = self.mse(new_values, returns[minibatch_indices])
 				L_S = new_entropy.mean()
 
 				# Updating the network
@@ -300,7 +302,7 @@ class PPO(Algorithm):
 				self.critic_losses.append(L_vf.item())
 				self.entropy.append(L_S.item())
 
-	def _compute_advantages(self, buffer: Buffer, gamma: float, lam: float) -> tensor:
+	def _compute_advantages(self, buffer: Buffer, gamma: float, gae_lambda: float) -> tensor:
 		_, next_states, dones, _, rewards, values, _ = buffer.get_all()
 
 		next_values = values.roll(-1, dims=0)
@@ -312,7 +314,7 @@ class PPO(Algorithm):
 		last_advantage = advantages[-1]
 		next_step_terminates = dones[-1]  # should be the dones of the next step however cannot reach it
 		for t in reversed(range(buffer.max_len)):
-			advantages[t] = last_advantage = deltas[t] + gamma * lam * last_advantage * (1 - next_step_terminates)
+			advantages[t] = last_advantage = deltas[t] + gamma * gae_lambda * last_advantage * (1 - next_step_terminates)
 			next_step_terminates = dones[t]
 
 		return advantages

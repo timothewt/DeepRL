@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 from torch import nn, tensor
+from torch.utils.tensorboard import SummaryWriter
 from torch.distributions import Categorical, Normal
 
 from algorithms.Algorithm import Algorithm
@@ -95,10 +96,7 @@ class A2C(Algorithm):
 
 		# Stats
 
-		self.actor_losses = []
-		self.critic_losses = []
-		self.entropy = []
-		self.log_freq = config.get("log_freq", 10)
+		self.writer = None
 
 		# Algorithm hyperparameters
 
@@ -162,13 +160,10 @@ class A2C(Algorithm):
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
 		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
-	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
+	def train(self, max_steps: int) -> None:
 		# From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
 
-		self.rewards = []
-		self.actor_losses = []
-		self.critic_losses = []
-		self.entropy = []
+		self.writer = SummaryWriter()
 
 		steps = 0
 		episode = 0
@@ -224,22 +219,12 @@ class A2C(Algorithm):
 
 			first_agent_rewards += rewards[0]
 			if dones[0]:
-				self.rewards.append(first_agent_rewards)
+				self.writer.add_scalar("Rewards", first_agent_rewards, episode)
 				first_agent_rewards = 0
-				if episode % self.log_freq == 0:
-					self.log_rewards(rewards=self.rewards, episode=episode, avg_period=10)
 				episode += 1
 			steps += 1
 
 		print("==== TRAINING COMPLETE ====")
-
-		if plot_training_stats:
-			self.plot_training_stats([
-				("Reward", "Episode", self.rewards),
-				("Actor loss", "Update step", self.actor_losses),
-				("Critic loss", "Update step", self.critic_losses),
-				("Entropy", "Update step", self.entropy),
-			], n=max_steps // 1000)
 
 	def update_networks(self, buffer: Buffer) -> None:
 
@@ -266,9 +251,9 @@ class A2C(Algorithm):
 		self.actor_optimizer.step()
 		self.critic_optimizer.step()
 
-		self.actor_losses.append(actor_loss.item())
-		self.critic_losses.append(critic_loss.item())
-		self.entropy.append(entropies.mean().item())
+		self.writer.add_scalar("Loss/Actor_Loss", actor_loss.item())
+		self.writer.add_scalar("Loss/Critic_Loss", critic_loss.item())
+		self.writer.add_scalar("Loss/Entropy", entropy_loss.item())
 
 	def scale_to_action_space(self, actions: tensor) -> tensor:
 		actions = torch.clamp(actions, 0, 1)

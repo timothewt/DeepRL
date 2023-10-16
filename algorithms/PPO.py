@@ -4,8 +4,8 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
-from torch.utils.tensorboard import SummaryWriter
 from torch import nn, tensor
+from torch.utils.tensorboard import SummaryWriter
 from torch.distributions import Categorical, Normal
 
 from algorithms.Algorithm import Algorithm
@@ -14,6 +14,9 @@ from models.FCNet import FCNet
 
 
 class Buffer:
+	"""
+	Memory buffer used for PPO
+	"""
 	def __init__(
 			self,
 			num_envs: int,
@@ -22,6 +25,14 @@ class Buffer:
 			actions_nb: int = 1,
 			device: torch.device = torch.device("cpu"),
 	):
+		"""
+		Initialization of the buffer
+		:param num_envs: number of parallel environments
+		:param max_len: maximum length of the buffer, typically the PPO horizon parameter
+		:param state_shape: shape of the state given to the policy
+		:param actions_nb: number of possible actions (1 for discrete and n for continuous)
+		:param device: device used by PyTorch
+		"""
 		self.states = torch.empty((max_len, num_envs) + state_shape, device=device)
 		self.next_states = torch.empty((max_len, num_envs) + state_shape, device=device)
 		self.dones = torch.empty((max_len, num_envs, 1), device=device)
@@ -37,6 +48,10 @@ class Buffer:
 		self.i = 0
 
 	def is_full(self) -> bool:
+		"""
+		Checks if the buffer is full
+		:return: True if the buffer is full False otherwise
+		"""
 		return self.i == self.max_len
 
 	def push(
@@ -49,6 +64,17 @@ class Buffer:
 			values: tensor,
 			log_probs: tensor
 	) -> None:
+		"""
+		Pushes new values in the buffer of shape (num_env, data_shape)
+		:param states: states of each environment
+		:param next_states: next states after this step
+		:param dones: if the step led to a termination
+		:param actions: actions made by the agents
+		:param rewards: rewards given for this action
+		:param values: critic policy value
+		:param log_probs: log probability of the actions
+		:return:
+		"""
 		assert self.i < self.max_len, "Buffer is full!"
 
 		self.states[self.i] = states
@@ -62,9 +88,17 @@ class Buffer:
 		self.i += 1
 
 	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+		"""
+		Gives all the values of the buffer
+		:return: all buffer tensors
+		"""
 		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs
 
 	def get_all_flattened(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+		"""
+		Gives all the buffer values as flattened tensors
+		:return: all buffer tensors flattened
+		"""
 		return self.states.view((self.max_len * self.num_envs,) + self.state_shape), \
 			self.next_states.view((self.max_len * self.num_envs,) + self.state_shape), \
 			self.dones.flatten(), \
@@ -74,6 +108,9 @@ class Buffer:
 			self.log_probs.flatten(end_dim=1)
 
 	def reset(self) -> None:
+		"""
+		Resets the iteration variable
+		"""
 		self.i = 0
 
 
@@ -133,8 +170,8 @@ class PPO(Algorithm):
 
 		self.batch_size = self.horizon * self.num_envs
 		self.minibatch_size = config.get("minibatch_size", self.batch_size)
-		assert self.batch_size % self.minibatch_size == 0, \
-			"Batch size (num_envs * horizon) must be a multiple of mini-batch size!"
+		assert self.horizon % self.minibatch_size == 0, \
+			"Horizon size must be a multiple of mini-batch size!"
 		self.minibatch_nb_per_batch = self.batch_size // self.minibatch_size
 
 		self.mse = nn.MSELoss()
@@ -180,8 +217,12 @@ class PPO(Algorithm):
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
 		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
-	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
-		# From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
+	def train(self, max_steps: int) -> None:
+		"""
+		Trains the algorithm on the chosen environment
+		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
+		:param max_steps: maximum number of steps that can be done
+		"""
 
 		self.writer = SummaryWriter()
 
@@ -206,7 +247,7 @@ class PPO(Algorithm):
 				actions = dist.sample()
 				actions_to_input = self._scale_to_action_space(actions).cpu().numpy()
 				log_probs = dist.log_prob(actions)
-			else:
+			else:  # discrete
 				probs = actor_output
 				dist = Categorical(probs=probs)
 				actions = dist.sample()
@@ -244,6 +285,10 @@ class PPO(Algorithm):
 		print("==== TRAINING COMPLETE ====")
 
 	def _update_networks(self, buffer: Buffer) -> None:
+		"""
+		Updates the actor and critic networks according to the PPO paper
+		:param buffer: complete buffer of experiences
+		"""
 		states, _, _, actions, rewards, values, old_log_probs = buffer.get_all_flattened()
 		values, old_log_probs = values.detach().view(self.batch_size, 1), old_log_probs.detach()
 		if self.actions_type == "discrete":
@@ -255,6 +300,7 @@ class PPO(Algorithm):
 
 		for _ in range(self.num_epochs):
 			indices = torch.randperm(self.batch_size)
+
 			for m in range(self.minibatch_nb_per_batch):
 				start = m * self.minibatch_size
 				end = start + self.minibatch_size
@@ -271,7 +317,7 @@ class PPO(Algorithm):
 				new_entropy = new_dist.entropy()
 				new_values = self.critic(states[minibatch_indices])
 
-				r = torch.exp(new_log_probs - old_log_probs[minibatch_indices])
+				r = torch.exp(new_log_probs - old_log_probs[minibatch_indices])  # policy ratio
 				L_clip = torch.min(
 					r * advantages[minibatch_indices],
 					torch.clamp(r, 1 - self.eps, 1 + self.eps) * advantages[minibatch_indices]
@@ -294,6 +340,13 @@ class PPO(Algorithm):
 				self.writer.add_scalar("Loss/Entropy", L_S.item())
 
 	def _compute_advantages(self, buffer: Buffer, gamma: float, gae_lambda: float) -> tensor:
+		"""
+		Computes the advantages for all steps of the buffer
+		:param buffer: complete buffer of experiences
+		:param gamma: rewards discount rate
+		:param gae_lambda: lambda parameter of the GAE
+		:return: the advantages for each timesteps as a tensor
+		"""
 		_, next_states, dones, _, rewards, values, _ = buffer.get_all()
 
 		next_values = values.roll(-1, dims=0)
@@ -311,6 +364,11 @@ class PPO(Algorithm):
 		return advantages
 
 	def _scale_to_action_space(self, actions: tensor) -> tensor:
+		"""
+		For continuous action spaces, scales the action given by the distribution to the action spaces
+		:param actions: actions given by the distribution
+		:return: the scaled actions
+		"""
 		actions = torch.clamp(actions, 0, 1)
 		actions = actions * self.action_space_intervals + self.action_space_low
 		return actions

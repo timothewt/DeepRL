@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from gymnasium import spaces
 from torch import tensor, nn as nn
+from torch.utils.tensorboard import SummaryWriter
 
 from algorithms.Algorithm import Algorithm
 from models.FCNet import FCNet
@@ -52,6 +53,10 @@ class DQN(Algorithm):
 
 		self.device = config.get("device", torch.device("cpu"))
 
+		# Stats
+
+		self.writer = None
+
 		# Environment
 
 		self.env: gym.Env = gym.make(config.get("env_name", None))
@@ -96,15 +101,9 @@ class DQN(Algorithm):
 		self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=self.lr)
 		self.loss_fn: nn.MSELoss = nn.MSELoss()
 
-		# Training stats
-		self.rewards = []
-		self.losses = []
-		self.log_freq = config.get("log_freq", 50)
-
 	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
 
-		self.rewards = []
-		self.losses = []
+		self.writer = SummaryWriter()
 
 		steps = 0
 		episode = 0
@@ -113,11 +112,10 @@ class DQN(Algorithm):
 		print("==== STARTING TRAINING ====")
 
 		while steps <= max_steps:
-			self.rewards.append(0)
-			self.losses.append(0)
 
 			obs, infos = self.env.reset()
 			done = False
+			episode_rewards = 0
 
 			while not done:
 
@@ -129,10 +127,8 @@ class DQN(Algorithm):
 
 				new_obs, reward, done, _, _ = self.env.step(action)
 				self.replay_memory.push(obs, action, reward, new_obs, done)
-				self.rewards[episode] += reward
-
 				obs = new_obs
-
+				episode_rewards += reward
 				steps += 1
 
 				if self.replay_memory.current_length < self.batch_size:
@@ -153,10 +149,11 @@ class DQN(Algorithm):
 
 				self.optimizer.zero_grad()
 				loss = self.loss_fn(predictions, target)
-				self.losses.append(loss.item())
-
 				loss.backward()
 				self.optimizer.step()
+
+				self.writer.add_scalar("Stats/Loss", loss, episode)
+				self.writer.add_scalar("Stats/Epsilon", self.eps, episode)
 
 				self.eps = max(self.eps * self.eps_decay, self.eps_min)
 
@@ -166,9 +163,7 @@ class DQN(Algorithm):
 
 				steps_before_target_network_update -= 1
 
-			if episode % self.log_freq == 0:
-				self.log_rewards(episode=episode, avg_period=10)
-
+			self.writer.add_scalar("Stats/Reward", episode_rewards, episode)
 			episode += 1
 
 		print("==== TRAINING COMPLETE ====")

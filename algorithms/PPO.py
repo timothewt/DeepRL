@@ -115,26 +115,33 @@ class Buffer:
 
 
 class PPO(Algorithm):
+	"""
+	Proximal Policy Algorithm
+	"""
 
 	def __init__(self, config: dict[str: Any]):
 		"""
 		:param config:
-			env_name (str) : name of the environment in the Gym registry
-			num_envs (int) : number of environments in parallel
-			device (torch.device) : device used (cpu, gpu)
-			actor_lr (float) : learning rate of the actor
-			critic_lr (float) : learning rate of the critic
-			gamma (float) : discount factor
-			gae_lambda (float) : GAE parameter
-			horizon (int) : steps number between each update
-			num_epochs (int) : number of epochs during the policy updates
-			ent_coef (float) : entropy bonus coefficient
-			vf_coef (float) : value function loss coefficient
-			eps (float) : epsilon clip value
-			minibatch_size (float) : size of the mini-batches used to update the policy
-			use_grad_clip (bool) : boolean telling if gradient clipping is used
-			grad_clip (float) : value at which the gradients will be clipped
-			log_freq (int): episodes nb interval at which a log is given
+			env_name (str): name of the environment in the Gym registry
+			num_envs (int): number of environments in parallel
+			device (torch.device): device used (cpu, gpu)
+			actor_lr (float): learning rate of the actor
+			critic_lr (float): learning rate of the critic
+			gamma (float): discount factor
+			gae_lambda (float): GAE parameter
+			horizon (int): steps number between each update
+			num_epochs (int): number of epochs during the policy updates
+			ent_coef (float): entropy bonus coefficient
+			vf_coef (float): value function loss coefficient
+			eps (float): epsilon clip value
+			minibatch_size (float): size of the mini-batches used to update the policy
+			use_grad_clip (bool): boolean telling if gradient clipping is used
+			grad_clip (float): value at which the gradients will be clipped
+
+			actor_hidden_layers_nb (int): number of hidden linear layers in the actor network
+			actor_hidden_size (int): size of the hidden linear layers in the actor network
+			critic_hidden_layers_nb (int): number of hidden linear layers in the critic network
+			critic_hidden_size (int): size of the hidden linear layers in the actor network
 		"""
 		super().__init__(config=config)
 
@@ -223,7 +230,6 @@ class PPO(Algorithm):
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 		:param max_steps: maximum number of steps that can be done
 		"""
-
 		self.writer = SummaryWriter()
 
 		steps = 0

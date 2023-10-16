@@ -12,8 +12,15 @@ from models.FCNet import FCNet
 
 
 class ReplayMemory:
-
+	"""
+	Replay memory storing all the previous steps data, up to a certain length, then replaces the oldest data
+	"""
 	def __init__(self, max_length: int = 10_000, state_shape: tuple[int] = (1,)):
+		"""
+		Initializes the memory
+		:param max_length: maximum length of the memory after which the oldest values will be replaced
+		:param state_shape: shape of the state
+		"""
 		self.states = np.empty((max_length,) + state_shape, dtype=float)
 		self.actions = np.empty(max_length, dtype=int)
 		self.rewards = np.empty(max_length, dtype=float)
@@ -25,6 +32,14 @@ class ReplayMemory:
 		self.i = 0
 
 	def push(self, state, action, reward, next_state, is_terminal) -> None:
+		"""
+		Pushes new values in the memory
+		:param state: state before the action
+		:param action: action taken by the agent
+		:param reward: reward given for this action at that state
+		:param next_state: next state after doing the action
+		:param is_terminal: tells if the action done has terminated the agent
+		"""
 		self.i %= self.max_length
 		self.current_length = min(self.current_length + 1, self.max_length)
 
@@ -35,7 +50,12 @@ class ReplayMemory:
 		self.is_terminal[self.i] = is_terminal
 		self.i += 1
 
-	def sample(self, batch_size: int):
+	def sample(self, batch_size: int) -> tuple[tensor, tensor, tensor, tensor, tensor]:
+		"""
+		Samples a random batch in all the replay memory
+		:param batch_size: size of the returned batch
+		:return: a random batch in the memory
+		"""
 		indices = np.random.choice(self.current_length, size=batch_size)
 		return self.states[indices], \
 			self.actions[indices], \
@@ -45,8 +65,29 @@ class ReplayMemory:
 
 
 class DQN(Algorithm):
+	"""
+	Deep Q Network algorithm
+	"""
 
 	def __init__(self, config: dict):
+		"""
+		:param config:
+			env_name (str): name of the environment in the Gym registry
+			device (torch.device): device used (cpu, gpu)
+
+			lr (float): learning rate of the agent
+			gamma (float): discount factor
+			eps (float): epsilon value of the epsilon greedy strategy
+			eps_decay (float): decay of the epsilon parameter at each update step
+			eps_min (float): minimum value of the epsilon parameter
+			batch_size (float): size of the batches used to update the policy
+			target_network_update_frequency (int): steps interval before the target network gets replaced by the policy
+			network
+			max_replay_buffer_size (int): maximum size of the replay buffer
+
+			hidden_layers_nb (int): number of hidden linear layers in the policy network
+			hidden_size (int): size of the hidden linear layers
+		"""
 		super().__init__(config)
 
 		# Device
@@ -73,7 +114,7 @@ class DQN(Algorithm):
 		self.batch_size: int = config.get("batch_size", 64)
 		self.target_network_update_frequency: int = config.get("target_network_update_frequency", 100)
 
-		self.replay_memory: ReplayMemory = ReplayMemory(config.get("max_replay_buffer_size", 10_000), self.env.observation_space.shape)
+		self.replay_memory = ReplayMemory(config.get("max_replay_buffer_size", 10_000), self.env.observation_space.shape)
 
 		# Policies
 
@@ -101,8 +142,11 @@ class DQN(Algorithm):
 		self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=self.lr)
 		self.loss_fn: nn.MSELoss = nn.MSELoss()
 
-	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
-
+	def train(self, max_steps: int) -> None:
+		"""
+		Trains the algorithm on the chosen environment
+		:param max_steps: maximum number of steps that can be done
+		"""
 		self.writer = SummaryWriter()
 
 		steps = 0

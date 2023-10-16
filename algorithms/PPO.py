@@ -4,6 +4,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
+from torch.utils.tensorboard import SummaryWriter
 from torch import nn, tensor
 from torch.distributions import Categorical, Normal
 
@@ -114,11 +115,7 @@ class PPO(Algorithm):
 
 		# Stats
 
-		self.rewards = []
-		self.actor_losses = []
-		self.critic_losses = []
-		self.entropy = []
-		self.log_freq = config.get("log_freq", 10)
+		self.writer = None
 
 		# Algorithm hyperparameters
 
@@ -186,10 +183,7 @@ class PPO(Algorithm):
 	def train(self, max_steps: int, plot_training_stats: bool = False) -> None:
 		# From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 
-		self.rewards = []
-		self.actor_losses = []
-		self.critic_losses = []
-		self.entropy = []
+		self.writer = SummaryWriter()
 
 		steps = 0
 		episode = 0
@@ -242,22 +236,12 @@ class PPO(Algorithm):
 
 			first_agent_rewards += rewards[0]
 			if dones[0]:
-				self.rewards.append(first_agent_rewards)
+				self.writer.add_scalar("Rewards", first_agent_rewards, episode)
 				first_agent_rewards = 0
-				if episode % self.log_freq == 0:
-					self.log_rewards(rewards=self.rewards, episode=episode, avg_period=10)
 				episode += 1
 			steps += 1
 
 		print("==== TRAINING COMPLETE ====")
-
-		if plot_training_stats:
-			self.plot_training_stats([
-				("Reward", "Episode", self.rewards),
-				("Actor loss", "Update step", self.actor_losses),
-				("Critic loss", "Update step", self.critic_losses),
-				("Entropy", "Update step", self.entropy),
-			], n=max_steps // 1000)
 
 	def _update_networks(self, buffer: Buffer) -> None:
 		states, _, _, actions, rewards, values, old_log_probs = buffer.get_all_flattened()
@@ -305,9 +289,9 @@ class PPO(Algorithm):
 				self.actor_optimizer.step()
 				self.critic_optimizer.step()
 
-				self.actor_losses.append(L_clip.item())
-				self.critic_losses.append(L_vf.item())
-				self.entropy.append(L_S.item())
+				self.writer.add_scalar("Loss/Actor_Loss", L_clip.item())
+				self.writer.add_scalar("Loss/Critic_Loss", L_vf.item())
+				self.writer.add_scalar("Loss/Entropy", L_S.item())
 
 	def _compute_advantages(self, buffer: Buffer, gamma: float, gae_lambda: float) -> tensor:
 		_, next_states, dones, _, rewards, values, _ = buffer.get_all()

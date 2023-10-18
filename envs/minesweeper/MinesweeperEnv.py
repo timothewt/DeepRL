@@ -45,11 +45,6 @@ class MinesweeperEnv(gym.Env):
 
 	def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
 		row, col = action // self.grid_width, action % self.grid_width
-		if self.grid[row, col] != -1:
-			print(f"{action=}, {row=} {col=}")
-			print(self.render())
-			print("Action mask not working!")
-			raise RuntimeError
 
 		terminated = truncated = False
 
@@ -59,7 +54,7 @@ class MinesweeperEnv(gym.Env):
 			truncated = True
 		else:
 			self._discover_cell(row, col)
-		terminated = (self.grid < 0).sum() == self.bombs_nb
+			terminated = (self.grid < 0).sum() == self.bombs_nb
 
 		reward = self._get_reward(terminated, truncated)
 		obs = self._get_obs()
@@ -114,7 +109,7 @@ class MinesweeperEnv(gym.Env):
 		elif truncated:
 			return -50
 		else:
-			return -.5
+			return .1
 
 	def _get_obs(self) -> dict[str: np.ndarray]:
 		return {

@@ -72,7 +72,7 @@ class DQN(Algorithm):
 	def __init__(self, config: dict):
 		"""
 		:param config:
-			env_name (str): name of the environment in the Gym registry
+			env_fn (Callable[[], gymnasium.Env]): function returning a Gymnasium environment
 			device (torch.device): device used (cpu, gpu)
 
 			lr (float): learning rate of the agent
@@ -100,9 +100,9 @@ class DQN(Algorithm):
 
 		# Environment
 
-		self.env: gym.Env = gym.make(config.get("env_name", None))
-		assert self.env is not None, "No environment provided!"
-		self.max_episode_steps = self.env.spec.max_episode_steps
+		self.env_fn = config.get("env_fn", None)
+		assert self.env_fn is not None, "No environment function provided!"
+		self.env: gym.Env = self.env_fn()
 
 		# Algorithm hyperparameters
 

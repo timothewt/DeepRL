@@ -4,9 +4,11 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
+from gymnasium.vector.async_vector_env import AsyncVectorEnv
 from torch import nn, tensor
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions import Categorical, Normal
+from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
 from models.ActorContinuous import ActorContinuous
@@ -34,6 +36,7 @@ class Buffer:
 		:param state_shape: shape of the state given to the policy
 		:param actions_nb: number of possible actions (1 for discrete and n for continuous)
 		:param device: device used by PyTorch
+		:param action_mask_size: size of the action mask, corresponding to the size of the Discrete action space
 		"""
 		self.states = torch.empty((max_len, num_envs) + state_shape, device=device)
 		self.next_states = torch.empty((max_len, num_envs) + state_shape, device=device)
@@ -88,7 +91,7 @@ class Buffer:
 		self.rewards[self.i] = rewards
 		self.values[self.i] = values
 		self.log_probs[self.i] = log_probs
-		if action_mask:
+		if action_mask is not None:
 			self.action_masks[self.i] = action_mask
 
 		self.i += 1
@@ -129,9 +132,10 @@ class PPO(Algorithm):
 	def __init__(self, config: dict[str: Any]):
 		"""
 		:param config:
-			env_name (str): name of the environment in the Gym registry
+			env_fn (Callable[[], gymnasium.Env]): function returning a Gymnasium environment
 			num_envs (int): number of environments in parallel
 			device (torch.device): device used (cpu, gpu)
+
 			actor_lr (float): learning rate of the actor
 			critic_lr (float): learning rate of the critic
 			gamma (float): discount factor
@@ -158,14 +162,10 @@ class PPO(Algorithm):
 
 		# Vectorized envs
 
-		self.env_name = config.get("env_name", None)
-		assert self.env_name in gym.registry.keys(), "Environment not in Gymnasium registry!"
+		self.env_fn = config.get("env_fn", None)
+		assert self.env_fn is not None, "No environment function provided!"
 		self.num_envs = max(config.get("num_envs", 1), 1)
-		self.envs: gym.experimental.vector.VectorEnv = gym.make_vec(
-			config.get("env_name", None),
-			num_envs=self.num_envs,
-			**config.get('env_kwargs', {}),
-		)
+		self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
 
 		self.env_uses_action_mask = config.get("env_uses_action_mask", False)
 
@@ -192,8 +192,6 @@ class PPO(Algorithm):
 		assert self.horizon % self.minibatch_size == 0, \
 			"Horizon size must be a multiple of mini-batch size!"
 		self.minibatch_nb_per_batch = self.batch_size // self.minibatch_size
-
-		self.mse = nn.MSELoss()
 
 		# Policies
 
@@ -245,6 +243,8 @@ class PPO(Algorithm):
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
 		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
+		self.mse = nn.MSELoss()
+
 	def train(self, max_steps: int) -> None:
 		"""
 		Trains the algorithm on the chosen environment
@@ -253,10 +253,9 @@ class PPO(Algorithm):
 		"""
 		self.writer = SummaryWriter()
 
-		steps = 0
 		episode = 0
 
-		buffer = Buffer(self.num_envs, self.horizon, self.env_obs_space.shape, self.actions_nb, self.device)
+		buffer = Buffer(self.num_envs, self.horizon, self.env_obs_space.shape, self.actions_nb, self.device, self.action_mask_size)
 
 		print("==== STARTING TRAINING ====")
 
@@ -268,7 +267,7 @@ class PPO(Algorithm):
 		obs = torch.from_numpy(obs).to(self.device)
 		first_agent_rewards = 0
 
-		while steps <= max_steps:
+		for _ in tqdm(range(max_steps)):
 			if self.env_uses_action_mask:
 				actor_output = self.actor(obs, masks)
 			else:
@@ -304,6 +303,7 @@ class PPO(Algorithm):
 				torch.from_numpy(rewards).to(self.device).unsqueeze(1),
 				critic_output,
 				log_probs,
+				masks,
 			)
 
 			obs = new_obs
@@ -318,7 +318,6 @@ class PPO(Algorithm):
 				self.writer.add_scalar("Rewards", first_agent_rewards, episode)
 				first_agent_rewards = 0
 				episode += 1
-			steps += 1
 
 		print("==== TRAINING COMPLETE ====")
 

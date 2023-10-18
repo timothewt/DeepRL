@@ -11,6 +11,7 @@ from torch.distributions import Categorical, Normal
 from algorithms.Algorithm import Algorithm
 from models.ActorContinuous import ActorContinuous
 from models.FCNet import FCNet
+from models.MaskedFCNet import MaskedFCNet
 
 
 class Buffer:
@@ -24,6 +25,7 @@ class Buffer:
 			state_shape: tuple[int] = (1,),
 			actions_nb: int = 1,
 			device: torch.device = torch.device("cpu"),
+			action_mask_size: int = 1
 	):
 		"""
 		Initialization of the buffer
@@ -40,6 +42,7 @@ class Buffer:
 		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
 		self.values = torch.empty((max_len, num_envs, 1), device=device)
 		self.log_probs = torch.empty((max_len, num_envs, actions_nb), device=device)
+		self.action_masks = torch.empty((max_len, num_envs, action_mask_size), device=device)
 
 		self.num_envs = num_envs
 		self.state_shape = state_shape
@@ -62,7 +65,8 @@ class Buffer:
 			actions: tensor,
 			rewards: tensor,
 			values: tensor,
-			log_probs: tensor
+			log_probs: tensor,
+			action_mask: tensor = None,
 	) -> None:
 		"""
 		Pushes new values in the buffer of shape (num_env, data_shape)
@@ -73,7 +77,7 @@ class Buffer:
 		:param rewards: rewards given for this action
 		:param values: critic policy value
 		:param log_probs: log probability of the actions
-		:return:
+		:param action_mask: action mask used in some environments
 		"""
 		assert self.i < self.max_len, "Buffer is full!"
 
@@ -84,17 +88,19 @@ class Buffer:
 		self.rewards[self.i] = rewards
 		self.values[self.i] = values
 		self.log_probs[self.i] = log_probs
+		if action_mask:
+			self.action_masks[self.i] = action_mask
 
 		self.i += 1
 
-	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
 		"""
 		Gives all the values of the buffer
 		:return: all buffer tensors
 		"""
-		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs
+		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs, self.action_masks
 
-	def get_all_flattened(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+	def get_all_flattened(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
 		"""
 		Gives all the buffer values as flattened tensors
 		:return: all buffer tensors flattened
@@ -105,7 +111,8 @@ class Buffer:
 			self.actions.flatten(end_dim=1), \
 			self.rewards.flatten(), \
 			self.values.flatten(), \
-			self.log_probs.flatten(end_dim=1)
+			self.log_probs.flatten(end_dim=1), \
+			self.action_masks.flatten(end_dim=1)
 
 	def reset(self) -> None:
 		"""
@@ -151,11 +158,16 @@ class PPO(Algorithm):
 
 		# Vectorized envs
 
+		self.env_name = config.get("env_name", None)
+		assert self.env_name in gym.registry.keys(), "Environment not in Gymnasium registry!"
 		self.num_envs = max(config.get("num_envs", 1), 1)
 		self.envs: gym.experimental.vector.VectorEnv = gym.make_vec(
 			config.get("env_name", None),
 			num_envs=self.num_envs,
+			**config.get('env_kwargs', {}),
 		)
+
+		self.env_uses_action_mask = config.get("env_uses_action_mask", False)
 
 		# Stats
 
@@ -185,9 +197,15 @@ class PPO(Algorithm):
 
 		# Policies
 
-		self.env_obs_space = self.envs.single_observation_space
-		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
 		self.env_act_space = self.envs.single_action_space
+		self.action_mask_size = 1
+		if self.env_uses_action_mask:
+			assert isinstance(self.env_act_space, spaces.Discrete)
+			self.env_obs_space = self.envs.single_observation_space["real_obs"]
+			self.action_mask_size = self.env_act_space.n
+		else:
+			self.env_obs_space = self.envs.single_observation_space
+		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
 		self.actions_nb = 1
 
 		actor_config = {
@@ -201,7 +219,10 @@ class PPO(Algorithm):
 			self.actions_type = "discrete"
 			actor_config["output_size"] = self.env_act_space.n
 			actor_config["output_function"] = nn.Softmax(dim=-1)
-			self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
+			if self.env_uses_action_mask:
+				self.actor: nn.Module = MaskedFCNet(config=actor_config).to(self.device)
+			else:
+				self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
 		elif isinstance(self.env_act_space, spaces.Box):
 			self.actions_type = "continuous"
 			self.action_space_low = torch.from_numpy(self.env_act_space.low).to(self.device)
@@ -235,16 +256,23 @@ class PPO(Algorithm):
 		steps = 0
 		episode = 0
 
-		buffer = Buffer(self.num_envs, self.horizon, self.envs.single_observation_space.shape, self.actions_nb, self.device)
+		buffer = Buffer(self.num_envs, self.horizon, self.env_obs_space.shape, self.actions_nb, self.device)
 
 		print("==== STARTING TRAINING ====")
 
 		obs, _ = self.envs.reset()
+		masks = new_masks = None
+		if self.env_uses_action_mask:
+			obs, masks = self._extract_mask_from_obs(obs)
+			masks = torch.from_numpy(masks).to(self.device)
 		obs = torch.from_numpy(obs).to(self.device)
 		first_agent_rewards = 0
 
 		while steps <= max_steps:
-			actor_output = self.actor(obs)
+			if self.env_uses_action_mask:
+				actor_output = self.actor(obs, masks)
+			else:
+				actor_output = self.actor(obs)
 			critic_output = self.critic(obs)  # value function
 
 			if self.actions_type == "continuous":
@@ -263,6 +291,9 @@ class PPO(Algorithm):
 
 			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
+			if self.env_uses_action_mask:
+				new_obs, new_masks = self._extract_mask_from_obs(new_obs)
+				new_masks = torch.from_numpy(new_masks).to(self.device)
 			new_obs = torch.from_numpy(new_obs).to(self.device)
 
 			buffer.push(
@@ -276,6 +307,7 @@ class PPO(Algorithm):
 			)
 
 			obs = new_obs
+			masks = new_masks
 
 			if buffer.is_full():
 				self._update_networks(buffer)
@@ -295,7 +327,7 @@ class PPO(Algorithm):
 		Updates the actor and critic networks according to the PPO paper
 		:param buffer: complete buffer of experiences
 		"""
-		states, _, _, actions, rewards, values, old_log_probs = buffer.get_all_flattened()
+		states, _, _, actions, rewards, values, old_log_probs, action_masks = buffer.get_all_flattened()
 		values, old_log_probs = values.detach().view(self.batch_size, 1), old_log_probs.detach()
 		if self.actions_type == "discrete":
 			actions = actions.view(self.batch_size)
@@ -312,7 +344,10 @@ class PPO(Algorithm):
 				end = start + self.minibatch_size
 				minibatch_indices = indices[start:end]
 
-				actor_output = self.actor(states[minibatch_indices])
+				if self.env_uses_action_mask:
+					actor_output = self.actor(states[minibatch_indices], action_masks[minibatch_indices])
+				else:
+					actor_output = self.actor(states[minibatch_indices])
 				if self.actions_type == "continuous":
 					means, stds = actor_output
 					new_dist = Normal(loc=means, scale=stds)
@@ -353,7 +388,7 @@ class PPO(Algorithm):
 		:param gae_lambda: lambda parameter of the GAE
 		:return: the advantages for each timesteps as a tensor
 		"""
-		_, next_states, dones, _, rewards, values, _ = buffer.get_all()
+		_, next_states, dones, _, rewards, values, _, _ = buffer.get_all()
 
 		next_values = values.roll(-1, dims=0)
 		next_values[-1] = self.critic(next_states[-1])
@@ -378,3 +413,14 @@ class PPO(Algorithm):
 		actions = torch.clamp(actions, 0, 1)
 		actions = actions * self.action_space_intervals + self.action_space_low
 		return actions
+
+	@staticmethod
+	def _extract_mask_from_obs(obs: dict[str: np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+		"""
+		Used to take out the mask from the observation when environment requires action masking
+		:param obs: raw observation containing the action mask and the real observation
+		:return: a tuple of the real observation and the masks
+		"""
+		real_obs = obs["real_obs"]
+		masks = obs["action_mask"]
+		return real_obs, masks

@@ -128,6 +128,7 @@ class A2C(Algorithm):
 		"""
 		:param config:
 			env_fn (Callable[[], gymnasium.Env]): function returning a Gymnasium environment
+			env_uses_action_mask (bool): tells if the environment outputs an action mask in its observations
 			num_envs (int): number of environments in parallel
 			device (torch.device): device used (cpu, gpu)
 
@@ -203,7 +204,6 @@ class A2C(Algorithm):
 			self.actions_type = "continuous"
 			self.action_space_low = torch.from_numpy(self.env_act_space.low).to(self.device)
 			self.action_space_high = torch.from_numpy(self.env_act_space.high).to(self.device)
-			self.action_space_intervals = (self.action_space_high - self.action_space_low)
 			actor_config["actions_nb"] = self.actions_nb = int(np.prod(self.env_act_space.shape))
 			self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
 		else:
@@ -240,7 +240,7 @@ class A2C(Algorithm):
 		obs = torch.from_numpy(obs).to(self.device)
 		first_agent_rewards = 0
 
-		for _ in tqdm(range(max_steps)):
+		for _ in tqdm(range(max_steps), desc="A2C Training"):
 			if self.env_uses_action_mask:
 				actor_output = self.actor(obs, masks)
 			else:
@@ -337,25 +337,3 @@ class A2C(Algorithm):
 			returns[t] = R
 
 		return returns.detach() - values
-
-	def _scale_to_action_space(self, actions: tensor) -> tensor:
-		"""
-		For continuous action spaces, scales the action given by the distribution to the action spaces
-		:param actions: actions given by the distribution
-		:return: the scaled actions
-		"""
-		actions = torch.clamp(actions, 0, 1)
-		actions = actions * self.action_space_intervals + self.action_space_low
-		return actions
-
-	@staticmethod
-	def _extract_mask_from_obs(obs: dict[str: np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-		"""
-		Used to take out the mask from the observation when environment requires action masking
-		:param obs: raw observation containing the action mask and the real observation
-		:return: a tuple of the real observation and the masks
-		"""
-		real_obs = obs["real_obs"]
-		masks = obs["action_mask"]
-		return real_obs, masks
-

@@ -8,9 +8,9 @@ from algorithms.DQN import DQN
 from envs.minesweeper.MinesweeperEnv import MinesweeperEnv
 
 if __name__ == "__main__":
-	env_name = "Pendulum-v1"
+	env_name = "CartPole-v1"
 
-	algo = A2C(config={
+	algo = DQN(config={
 		# "env_fn": lambda: gym.make(env_name),
 		"env_fn": lambda: MinesweeperEnv(),
 		"env_uses_action_mask": True,
@@ -24,10 +24,10 @@ if __name__ == "__main__":
 		"gae_lambda": .95,
 		"actor_lr": .00015,
 		"critic_lr": .0005,
-		"horizon": 512,
+		"horizon": 256,
 		"ent_coef": .01,
 		"minibatch_size": 32,
 		"t_max": 20,
 	})
 
-	algo.train(max_steps=50_000)
+	algo.train(max_steps=20_000)

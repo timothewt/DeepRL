@@ -10,9 +10,8 @@ if __name__ == "__main__":
 
 	algo = PPO(config={
 		"env_fn": lambda: gym.make("CartPole-v1"),
-		# "env_fn": lambda: AirportEnv(airport_icao="CYTZ", agents_nb=4, predetermined_path_agents_nb=0),
 		"num_envs": 4,
-		# "device": device("cuda:0" if cuda.is_available() else "cpu"),
+		"device": device("cuda:0" if cuda.is_available() else "cpu"),
 		"actor_hidden_layers_nb": 3,
 		"actor_hidden_size": 256,
 		"critic_hidden_layers_nb": 3,
@@ -26,4 +25,4 @@ if __name__ == "__main__":
 		"minibatch_size": 32,
 	})
 
-	algo.train(max_steps=20_000)
+	algo.train(max_steps=500_000)

@@ -40,3 +40,18 @@ class Algorithm:
 		actions = torch.clamp(actions, 0, 1)
 		actions = actions * self.action_space_intervals + self.action_space_low
 		return actions
+
+	@staticmethod
+	def dict2mdtable(d: dict[str: float], key: str = 'Name', val: str = 'Value'):
+		"""
+		Used to log hyperparameters in tensorboard
+		From https://github.com/tensorflow/tensorboard/issues/46#issuecomment-1331147757
+		:param d: dict mapping name to values
+		:param key: key in table header
+		:param val: value in table header
+		:return:
+		"""
+		rows = [f'| {key} | {val} |']
+		rows += ['|--|--|']
+		rows += [f'| {k} | {v} |' for k, v in d.items()]
+		return "  \n".join(rows)

@@ -275,6 +275,23 @@ class PPO(Algorithm):
 		self.writer = SummaryWriter(
 			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		)
+		self.writer.add_text(
+			"Hyperparameters",
+			self.dict2mdtable({
+				"actor_lr": self.actor_lr,
+				"critic_lr": self.critic_lr,
+				"gamma": self.gamma,
+				"gae_lambda": self.gae_lambda,
+				"horizon": self.horizon,
+				"num_epochs": self.num_epochs,
+				"ent_coef": self.ent_coef,
+				"vf_coef": self.vf_coef,
+				"eps": self.eps,
+				"minibatch_size": self.minibatch_size,
+				"use_grad_clip": self.use_grad_clip,
+				"grad_clip": self.grad_clip,
+			})
+		)
 
 		episode = 0
 

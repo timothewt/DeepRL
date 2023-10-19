@@ -439,7 +439,7 @@ class PPO(Algorithm):
 		:param buffer: complete buffer of experiences
 		:param gamma: rewards discount rate
 		:param gae_lambda: lambda parameter of the GAE
-		:return: the advantages for each timesteps as a tensor
+		:return: the advantages for each timestep as a tensor
 		"""
 		_, next_states, dones, _, rewards, values, _, _ = buffer.get_all()
 

@@ -7,7 +7,7 @@ from gymnasium.spaces import Box, Discrete, Dict
 
 
 class SnakeEnv(gym.Env):
-	metadata = {"render_modes": ["ansi"], "render_fps": 1, "name": "MinesweeperEnv-v0"}
+	metadata = {"render_modes": ["ansi"], "render_fps": 1, "name": "SnakeEnv-v0"}
 
 	def __init__(self, width: int = 12, height: int = 12, render_mode: str | None = None):
 		super().__init__()
@@ -22,12 +22,9 @@ class SnakeEnv(gym.Env):
 
 		self.action_space = Discrete(4)  # up, right, down, left
 		self.observation_space = Dict({
-			"action_mask": Box(0, 1, (4,), dtype=np.float32),
-			"real_obs": Dict({
-				"head": Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
-				"food": Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
-				"distances_to_closest_obstacles": Box(0, np.sqrt(2) * max(self.width, self.height), (8,), dtype=np.float32),
-			})
+			"head": Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
+			"food": Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
+			"closest_obstacles": Box(0, max(self.width, self.height), (4,), dtype=np.float32),
 		})
 
 		self.render_mode: str | None = render_mode
@@ -36,7 +33,7 @@ class SnakeEnv(gym.Env):
 		self.snake = [(randint(0, self.width - 1), randint(0, self.height - 1))]
 		self._place_food()
 
-		return self._get_obs(), {}
+		return self._get_obs(), {"action_mask": self._get_action_mask()}
 
 	def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
 
@@ -51,7 +48,7 @@ class SnakeEnv(gym.Env):
 			case _:
 				new_head = (curr_x - 1, curr_y)
 
-		truncated = new_head in self.snake
+		truncated = new_head in self.snake or not 0 <= new_head[0] < self.width or not 0 <= new_head[1] < self.width
 
 		ate_food = new_head == self.food
 		if ate_food:
@@ -64,7 +61,7 @@ class SnakeEnv(gym.Env):
 		reward = self._get_reward(ate_food, truncated)
 		terminated = len(self.snake) == self.grid_dimension
 
-		return obs, reward, terminated, truncated, {}
+		return obs, reward, terminated, truncated, {"action_mask": self._get_action_mask()}
 
 	def render(self) -> None | str:
 		if self.render_mode == "ansi":
@@ -73,10 +70,12 @@ class SnakeEnv(gym.Env):
 				for col in range(self.width):
 					if (col, row) == self.food:
 						str_grid += "O  "
+					elif (col, row) == self.snake[0]:
+						str_grid += "▣  "
 					elif (col, row) in self.snake:
 						str_grid += "■  "
 					else:
-						str_grid += ".  "
+						str_grid += "⬝  "
 				str_grid += "\n"
 			return str_grid
 
@@ -94,12 +93,9 @@ class SnakeEnv(gym.Env):
 
 	def _get_obs(self) -> dict[str: np.ndarray]:
 		return {
-			"action_mask": self._get_action_mask(),
-			"real_obs": {
-				"head": np.array(self.snake[0]),
-				"food": np.array(self.food),
-				"closest_obstacles": np.array(self._get_distances_to_closest_obstacles(), dtype=np.float32),
-			}
+			"head": np.array(self.snake[0]),
+			"food": np.array(self.food),
+			"closest_obstacles": np.array(self._get_distances_to_closest_obstacles(), dtype=np.float32),
 		}
 
 	def _get_distances_to_closest_obstacles(self) -> tuple[float, float, float, float]:
@@ -130,11 +126,13 @@ class SnakeEnv(gym.Env):
 
 	def _get_action_mask(self) -> np.ndarray:
 		curr_x, curr_y = self.snake[0][0], self.snake[0][1]
-		mask = np.empty((4,), dtype=np.float32)
-		mask[0] = curr_y > 0 and (curr_x, curr_y - 1) not in self.snake
-		mask[1] = curr_x < self.width - 1 and (curr_x + 1, curr_y) not in self.snake
-		mask[2] = curr_y < self.height - 1 and (curr_x, curr_y + 1) not in self.snake
-		mask[3] = curr_x > 0 and (curr_x - 1, curr_y) not in self.snake
+		mask = np.ones((4,), dtype=np.float32)
+		if len(self.snake) == 1:
+			return mask
+		mask[0] = (curr_x, curr_y - 1) == self.snake[1]
+		mask[1] = (curr_x + 1, curr_y) == self.snake[1]
+		mask[2] = (curr_x, curr_y + 1) == self.snake[1]
+		mask[3] = (curr_x - 1, curr_y) == self.snake[1]
 		return mask
 
 	def _place_food(self) -> None:

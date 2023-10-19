@@ -23,10 +23,7 @@ class MinesweeperEnv(gym.Env):
 		self.discovered_cells_nb: int = 0
 
 		self.action_space = Discrete(self.grid_width * self.grid_height)
-		self.observation_space = Dict({
-			"action_mask": Box(0, 1, (self.action_space.n,), dtype=np.float32),
-			"real_obs": Box(-1, 9, (self.grid_dimension,), dtype=np.float32)
-		})
+		self.observation_space = Box(-1, 9, (self.grid_dimension,), dtype=np.float32)
 
 		self.render_mode: str | None = render_mode
 
@@ -41,7 +38,7 @@ class MinesweeperEnv(gym.Env):
 					self.bombs.add(new_bomb)
 					break
 
-		return self._get_obs(), {}
+		return self._get_obs(), {"action_mask": self._get_action_mask()}
 
 	def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
 		row, col = action // self.grid_width, action % self.grid_width
@@ -57,8 +54,7 @@ class MinesweeperEnv(gym.Env):
 			terminated = (self.grid < 0).sum() == self.bombs_nb
 
 		reward = self._get_reward(terminated, truncated)
-		obs = self._get_obs()
-		return obs, reward, terminated, truncated, {}
+		return self._get_obs(), reward, terminated, truncated, {"action_mask": self._get_action_mask()}
 
 	def render(self) -> None | str:
 		if self.render_mode == "ansi":
@@ -112,10 +108,7 @@ class MinesweeperEnv(gym.Env):
 			return .1
 
 	def _get_obs(self) -> dict[str: np.ndarray]:
-		return {
-			"action_mask": self._get_action_mask(),
-			"real_obs": self.grid.flatten(),
-		}
+		return self.grid.flatten()
 
 	def _get_action_mask(self) -> np.ndarray:
 		return (self.grid == -1).flatten().astype(np.float32)

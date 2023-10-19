@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 import gymnasium as gym
@@ -154,6 +155,7 @@ class A2C(Algorithm):
 
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
+		self.env = self.env_fn()
 		self.num_envs = max(config.get("num_envs", 1), 1)
 		self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
 
@@ -185,10 +187,15 @@ class A2C(Algorithm):
 		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
 		self.actions_nb = 1
 
+		self.actor_hidden_layers_nb = config.get("actor_hidden_layers_nb", 3)
+		self.actor_hidden_size = config.get("actor_hidden_size", 64)
+		self.critic_hidden_layers_nb = config.get("critic_hidden_layers_nb", 3)
+		self.critic_hidden_size = config.get("critic_hidden_size", 64)
+
 		actor_config = {
-			"input_size": int(np.prod(self.env_flat_obs_space.shape)),
-			"hidden_layers_nb": config.get("actor_hidden_layers_nb", 3),
-			"hidden_size": config.get("actor_hidden_size", 64),
+			"input_size": np.prod(self.env_flat_obs_space.shape),
+			"hidden_layers_nb": self.actor_hidden_layers_nb,
+			"hidden_size": self.actor_hidden_size,
 			"output_layer_std": .01,
 		}
 
@@ -214,8 +221,8 @@ class A2C(Algorithm):
 		critic_config = {
 			"input_size": int(np.prod(self.env_flat_obs_space.shape)),
 			"output_size": 1,
-			"hidden_layers_nb": config.get("critic_hidden_layers_nb", 3),
-			"hidden_size": config.get("critic_hidden_size", 64),
+			"hidden_layers_nb": self.critic_hidden_layers_nb,
+			"hidden_size": self.critic_hidden_size,
 			"output_layer_std": 1,
 		}
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
@@ -224,7 +231,30 @@ class A2C(Algorithm):
 	def train(self, max_steps: int) -> None:
 		# From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
 
-		self.writer = SummaryWriter()
+		self.writer = SummaryWriter(
+			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+		)
+		self.writer.add_text(
+			"Hyperparameters/hyperparameters",
+			self.dict2mdtable({
+				"num_envs": self.num_envs,
+				"actor_lr": self.actor_lr,
+				"critic_lr": self.critic_lr,
+				"gamma": self.gamma,
+				"t_max": self.t_max,
+				"ent_coef": self.ent_coef,
+				"vf_coef": self.vf_coef,
+			})
+		)
+		self.writer.add_text(
+			"Hyperparameters/FC Networks configuration",
+			self.dict2mdtable({
+				"actor_hidden_layers_nb": self.actor_hidden_layers_nb,
+				"actor_hidden_size": self.actor_hidden_size,
+				"critic_hidden_layers_nb": self.critic_hidden_layers_nb,
+				"critic_hidden_size": self.critic_hidden_size,
+			})
+		)
 
 		episode = 0
 
@@ -232,12 +262,13 @@ class A2C(Algorithm):
 
 		print("==== STARTING TRAINING ====")
 
-		obs, _ = self.envs.reset()
+		obs, infos = self.envs.reset()
 		masks = new_masks = None
 		if self.env_uses_action_mask:
-			obs, masks = self._extract_mask_from_obs(obs)
-			masks = torch.from_numpy(masks).to(self.device)
-		obs = torch.from_numpy(obs).to(self.device)
+			masks = torch.from_numpy(
+				np.stack(infos["action_mask"])
+			).float().to(self.device)
+		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
 		for _ in tqdm(range(max_steps), desc="A2C Training"):
@@ -263,12 +294,13 @@ class A2C(Algorithm):
 				actions = actions.unsqueeze(1)
 				entropies = dist.entropy().unsqueeze(1)
 
-			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
+			new_obs, rewards, dones, truncateds, new_infos = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
 			if self.env_uses_action_mask:
-				new_obs, new_masks = self._extract_mask_from_obs(new_obs)
-				new_masks = torch.from_numpy(new_masks).to(self.device)
-			new_obs = torch.from_numpy(new_obs).to(self.device)
+				new_masks = torch.from_numpy(
+					np.stack(new_infos["action_mask"])
+				).float().to(self.device)
+			new_obs = torch.from_numpy(self._flatten_obs(new_obs)).float().to(self.device)
 
 			buffer.push(
 				obs,

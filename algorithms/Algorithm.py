@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from gymnasium import spaces
 from torch import tensor
 
 
@@ -12,6 +13,7 @@ class Algorithm:
 
 		self.action_space_low = tensor([0])
 		self.action_space_high = tensor([0])
+		self.env_obs_space = spaces.Space()
 
 	def train(self, max_steps: int) -> None:
 		raise NotImplementedError
@@ -19,17 +21,6 @@ class Algorithm:
 	@property
 	def action_space_intervals(self) -> tensor:
 		return self.action_space_high - self.action_space_low
-
-	@staticmethod
-	def _extract_mask_from_obs(obs: dict[str: np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-		"""
-		Used to take out the mask from the observation when environment requires action masking
-		:param obs: raw observation containing the action mask and the real observation
-		:return: a tuple of the real observation and the masks
-		"""
-		real_obs = obs["real_obs"]
-		masks = obs["action_mask"]
-		return real_obs, masks
 
 	def _scale_to_action_space(self, actions: tensor) -> tensor:
 		"""
@@ -40,6 +31,16 @@ class Algorithm:
 		actions = torch.clamp(actions, 0, 1)
 		actions = actions * self.action_space_intervals + self.action_space_low
 		return actions
+
+	def _flatten_obs(self, obs: np.ndarray) -> np.ndarray:
+		"""
+		Used to flatten the observations before passing it to the policies and the buffer
+		:param obs: observation to flatten
+		:return: the observation in one dimension
+		"""
+		return np.array([
+			spaces.flatten(self.env_obs_space, value) for value in obs
+		])
 
 	@staticmethod
 	def dict2mdtable(d: dict[str: float], key: str = 'Name', val: str = 'Value'):

@@ -180,8 +180,7 @@ class DQN(Algorithm):
 		episode = 0
 		step = 0
 		steps_before_target_network_update = self.target_network_update_frequency
-		mask = None
-		new_mask = None
+		mask = new_mask = None
 
 		pbar = tqdm(desc="DQN Training", total=max_steps)
 		print("==== STARTING TRAINING ====")
@@ -189,7 +188,7 @@ class DQN(Algorithm):
 		while step <= max_steps:
 			obs, infos = self.env.reset()
 			if self.env_uses_action_mask:
-				obs, mask = self._extract_mask_from_obs(obs)
+				mask = np.stack(infos["action_mask"])
 			done = False
 			episode_rewards = 0
 
@@ -208,10 +207,10 @@ class DQN(Algorithm):
 								self.policy_network(tensor(obs, device=self.device))
 							).item()
 
-				new_obs, reward, terminated, truncated, _ = self.env.step(action)
+				new_obs, reward, terminated, truncated, new_infos = self.env.step(action)
 				done = terminated or truncated
 				if self.env_uses_action_mask:
-					new_obs, new_mask = self._extract_mask_from_obs(new_obs)
+					new_mask = np.stack(new_infos["action_mask"])
 				self.replay_memory.push(obs, mask, action, reward, new_obs, new_mask, done)
 				obs = new_obs
 				mask = new_mask

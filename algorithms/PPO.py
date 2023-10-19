@@ -4,14 +4,13 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 import torch
+import supersuit as ss
 from gymnasium import spaces
 from gymnasium.vector.async_vector_env import AsyncVectorEnv
 from pettingzoo import ParallelEnv
-from supersuit import pettingzoo_env_to_vec_env_v1, concat_vec_envs_v1
-from supersuit.vector import ConcatVecEnv
 from torch import nn, tensor
-from torch.utils.tensorboard import SummaryWriter
 from torch.distributions import Categorical, Normal
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
@@ -168,22 +167,25 @@ class PPO(Algorithm):
 
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
-		self.env = self.env_fn()
+		self.env: gym.Env | ParallelEnv = self.env_fn()
+		_, env_infos = self.env.reset()
 		assert isinstance(self.env, gym.Env) or isinstance(self.env, ParallelEnv), \
 			"Only gymnasium.Env and pettingzoo.ParallelEnv are currently supported."
 		self.is_multi_agents = isinstance(self.env, ParallelEnv)
 		self.num_envs = max(config.get("num_envs", 1), 1)
 		self.num_agents = 1
 		if self.is_multi_agents:
+			# pad observations of done agents
 			self.num_agents = len(self.env.possible_agents)
-			self.envs: ConcatVecEnv = concat_vec_envs_v1(pettingzoo_env_to_vec_env_v1(self.env), self.num_envs)
-			self.env_uses_action_mask = isinstance(self.envs.observation_space, spaces.Dict) and \
-											"action_mask" in self.envs.observation_space.keys()
+			self.envs: ss.ConcatVecEnv = ss.concat_vec_envs_v1(
+				ss.pettingzoo_env_to_vec_env_v1(ss.multiagent_wrappers.black_death_v3(self.env)),
+				self.num_envs
+			)
+			self.env_uses_action_mask = "action_mask" in env_infos[self.env.possible_agents[0]]
 			self.env_act_space = self.envs.action_space
 		else:
 			self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
-			self.env_uses_action_mask = isinstance(self.env.observation_space, spaces.Dict) and \
-											"action_mask" in self.env.observation_space.keys()
+			self.env_uses_action_mask = "action_mask" in env_infos
 			self.env_act_space = self.envs.single_action_space
 
 		# Stats
@@ -213,24 +215,24 @@ class PPO(Algorithm):
 		# Policies
 		self.action_mask_size = 1
 		if self.env_uses_action_mask:
-			assert isinstance(self.env_act_space, spaces.Discrete)
-			if self.is_multi_agents:
-				self.env_obs_space = self.envs.observation_space["real_obs"]
-			else:
-				self.env_obs_space = self.envs.single_observation_space["real_obs"]
+			assert isinstance(self.env_act_space, spaces.Discrete), "Action mask only supported in Discrete action spaces!"
 			self.action_mask_size = self.env_act_space.n
+		if self.is_multi_agents:
+			self.env_obs_space = self.envs.observation_space
 		else:
-			if self.is_multi_agents:
-				self.env_obs_space = self.envs.observation_space
-			else:
-				self.env_obs_space = self.envs.single_observation_space
+			self.env_obs_space = self.envs.single_observation_space
 		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
 		self.actions_nb = 1
 
+		self.actor_hidden_layers_nb = config.get("actor_hidden_layers_nb", 3)
+		self.actor_hidden_size = config.get("actor_hidden_size", 64)
+		self.critic_hidden_layers_nb = config.get("critic_hidden_layers_nb", 3)
+		self.critic_hidden_size = config.get("critic_hidden_size", 64)
+
 		actor_config = {
 			"input_size": np.prod(self.env_flat_obs_space.shape),
-			"hidden_layers_nb": config.get("actor_hidden_layers_nb", 3),
-			"hidden_size": config.get("actor_hidden_size", 64),
+			"hidden_layers_nb": self.actor_hidden_layers_nb,
+			"hidden_size": self.actor_hidden_size,
 			"output_layer_std": .01,
 		}
 
@@ -257,8 +259,8 @@ class PPO(Algorithm):
 		critic_config = {
 			"input_size": int(np.prod(self.env_flat_obs_space.shape)),
 			"output_size": 1,
-			"hidden_layers_nb": config.get("critic_hidden_layers_nb", 3),
-			"hidden_size": config.get("critic_hidden_size", 64),
+			"hidden_layers_nb": self.critic_hidden_layers_nb,
+			"hidden_size": self.critic_hidden_size,
 			"output_layer_std": 1,
 		}
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
@@ -276,8 +278,9 @@ class PPO(Algorithm):
 			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		)
 		self.writer.add_text(
-			"Hyperparameters",
+			"Hyperparameters/hyperparameters",
 			self.dict2mdtable({
+				"num_envs": self.num_envs,
 				"actor_lr": self.actor_lr,
 				"critic_lr": self.critic_lr,
 				"gamma": self.gamma,
@@ -292,6 +295,15 @@ class PPO(Algorithm):
 				"grad_clip": self.grad_clip,
 			})
 		)
+		self.writer.add_text(
+			"Hyperparameters/FC Networks configuration",
+			self.dict2mdtable({
+				"actor_hidden_layers_nb": self.actor_hidden_layers_nb,
+				"actor_hidden_size": self.actor_hidden_size,
+				"critic_hidden_layers_nb": self.critic_hidden_layers_nb,
+				"critic_hidden_size": self.critic_hidden_size,
+			})
+		)
 
 		episode = 0
 
@@ -299,11 +311,12 @@ class PPO(Algorithm):
 
 		print("==== STARTING TRAINING ====")
 
-		obs, _ = self.envs.reset()
+		obs, infos = self.envs.reset()
 		masks = new_masks = None
 		if self.env_uses_action_mask:
-			obs, masks = self._extract_mask_from_obs(obs)
-			masks = torch.from_numpy(masks).float().to(self.device)
+			masks = torch.from_numpy(
+				np.stack(infos["action_mask"])
+			).float().to(self.device)
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
@@ -328,11 +341,12 @@ class PPO(Algorithm):
 				log_probs = dist.log_prob(actions).unsqueeze(1)
 				actions = actions.unsqueeze(1)
 
-			new_obs, rewards, dones, truncateds, _ = self.envs.step(actions_to_input)
+			new_obs, rewards, dones, truncateds, new_infos = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
 			if self.env_uses_action_mask:
-				new_obs, new_masks = self._extract_mask_from_obs(new_obs)
-				new_masks = torch.from_numpy(new_masks).float().to(self.device)
+				new_masks = torch.from_numpy(
+					np.stack(new_infos["action_mask"])
+				).float().to(self.device)
 			new_obs = torch.from_numpy(self._flatten_obs(new_obs)).float().to(self.device)
 
 			buffer.push(
@@ -442,13 +456,3 @@ class PPO(Algorithm):
 			next_step_terminates = dones[t]
 
 		return advantages
-
-	def _flatten_obs(self, obs: np.ndarray) -> np.ndarray:
-		"""
-		Used to flatten the observations before passing it to the policies and the buffer
-		:param obs: observation to flatten
-		:return: the observation in one dimension
-		"""
-		return np.array([
-			spaces.flatten(self.env_obs_space, value) for value in obs
-		])

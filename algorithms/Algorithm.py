@@ -40,9 +40,9 @@ class Algorithm:
 		:param obs: observation to flatten
 		:return: the observation in one dimension
 		"""
-		if self.num_envs == 1 or not isinstance(obs, dict):
+		if self.num_envs == 1:
 			return spaces.flatten(self.env_obs_space, obs)
-		else:
+		elif isinstance(self.env_obs_space, spaces.Dict):
 			flat_obs = np.empty((self.num_envs,) + self.env_flat_obs_space.shape, dtype=np.float32)
 			for env in range(self.num_envs):
 				single_obs = {}
@@ -50,6 +50,10 @@ class Algorithm:
 					single_obs[key] = obs[key][env]
 				flat_obs[env] = spaces.flatten(self.env_obs_space, single_obs)
 			return flat_obs
+		else:
+			return np.array([
+				spaces.flatten(self.env_obs_space, value) for value in obs
+			])
 
 	@staticmethod
 	def dict2mdtable(d: dict[str: float], key: str = 'Name', val: str = 'Value'):

@@ -271,7 +271,6 @@ class DQN(Algorithm):
 		self.optimizer.step()
 
 		# Action masking makes loss go +inf,
-		# TODO: find a way to solve this
 
 		self.eps = max(self.eps * self.eps_decay, self.eps_min)
 

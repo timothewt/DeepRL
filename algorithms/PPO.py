@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 import gymnasium as gym
@@ -5,6 +6,9 @@ import numpy as np
 import torch
 from gymnasium import spaces
 from gymnasium.vector.async_vector_env import AsyncVectorEnv
+from pettingzoo import ParallelEnv
+from supersuit import pettingzoo_env_to_vec_env_v1, concat_vec_envs_v1
+from supersuit.vector import ConcatVecEnv
 from torch import nn, tensor
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions import Categorical, Normal
@@ -38,8 +42,8 @@ class Buffer:
 		:param device: device used by PyTorch
 		:param action_mask_size: size of the action mask, corresponding to the size of the Discrete action space
 		"""
-		self.states = torch.empty((max_len, num_envs) + state_shape, device=device)
-		self.next_states = torch.empty((max_len, num_envs) + state_shape, device=device)
+		self.states = torch.empty((max_len, num_envs, np.prod(state_shape)), device=device)
+		self.next_states = torch.empty((max_len, num_envs, np.prod(state_shape)), device=device)
 		self.dones = torch.empty((max_len, num_envs, 1), device=device)
 		self.actions = torch.empty((max_len, num_envs, actions_nb), device=device)
 		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
@@ -108,8 +112,8 @@ class Buffer:
 		Gives all the buffer values as flattened tensors
 		:return: all buffer tensors flattened
 		"""
-		return self.states.view((self.max_len * self.num_envs,) + self.state_shape), \
-			self.next_states.view((self.max_len * self.num_envs,) + self.state_shape), \
+		return self.states.view((self.max_len * self.num_envs, np.prod(self.state_shape))), \
+			self.next_states.view((self.max_len * self.num_envs, np.prod(self.state_shape))), \
 			self.dones.flatten(), \
 			self.actions.flatten(end_dim=1), \
 			self.rewards.flatten(), \
@@ -133,7 +137,6 @@ class PPO(Algorithm):
 		"""
 		:param config:
 			env_fn (Callable[[], gymnasium.Env]): function returning a Gymnasium environment
-			env_uses_action_mask (bool): tells if the environment outputs an action mask in its observations
 			num_envs (int): number of environments in parallel
 			device (torch.device): device used (cpu, gpu)
 
@@ -165,10 +168,23 @@ class PPO(Algorithm):
 
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
+		self.env = self.env_fn()
+		assert isinstance(self.env, gym.Env) or isinstance(self.env, ParallelEnv), \
+			"Only gymnasium.Env and pettingzoo.ParallelEnv are currently supported."
+		self.is_multi_agents = isinstance(self.env, ParallelEnv)
 		self.num_envs = max(config.get("num_envs", 1), 1)
-		self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
-
-		self.env_uses_action_mask = config.get("env_uses_action_mask", False)
+		self.num_agents = 1
+		if self.is_multi_agents:
+			self.num_agents = len(self.env.possible_agents)
+			self.envs: ConcatVecEnv = concat_vec_envs_v1(pettingzoo_env_to_vec_env_v1(self.env), self.num_envs)
+			self.env_uses_action_mask = isinstance(self.envs.observation_space, spaces.Dict) and \
+											"action_mask" in self.envs.observation_space.keys()
+			self.env_act_space = self.envs.action_space
+		else:
+			self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
+			self.env_uses_action_mask = isinstance(self.env.observation_space, spaces.Dict) and \
+											"action_mask" in self.env.observation_space.keys()
+			self.env_act_space = self.envs.single_action_space
 
 		# Stats
 
@@ -188,27 +204,31 @@ class PPO(Algorithm):
 		self.use_grad_clip = config.get("use_grad_clip", False)
 		self.grad_clip = config.get("grad_clip", .5)
 
-		self.batch_size = self.horizon * self.num_envs
+		self.batch_size = self.horizon * self.num_envs * self.num_agents
 		self.minibatch_size = config.get("minibatch_size", self.batch_size)
 		assert self.horizon % self.minibatch_size == 0, \
 			"Horizon size must be a multiple of mini-batch size!"
 		self.minibatch_nb_per_batch = self.batch_size // self.minibatch_size
 
 		# Policies
-
-		self.env_act_space = self.envs.single_action_space
 		self.action_mask_size = 1
 		if self.env_uses_action_mask:
 			assert isinstance(self.env_act_space, spaces.Discrete)
-			self.env_obs_space = self.envs.single_observation_space["real_obs"]
+			if self.is_multi_agents:
+				self.env_obs_space = self.envs.observation_space["real_obs"]
+			else:
+				self.env_obs_space = self.envs.single_observation_space["real_obs"]
 			self.action_mask_size = self.env_act_space.n
 		else:
-			self.env_obs_space = self.envs.single_observation_space
+			if self.is_multi_agents:
+				self.env_obs_space = self.envs.observation_space
+			else:
+				self.env_obs_space = self.envs.single_observation_space
 		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
 		self.actions_nb = 1
 
 		actor_config = {
-			"input_size": int(np.prod(self.env_flat_obs_space.shape)),
+			"input_size": np.prod(self.env_flat_obs_space.shape),
 			"hidden_layers_nb": config.get("actor_hidden_layers_nb", 3),
 			"hidden_size": config.get("actor_hidden_size", 64),
 			"output_layer_std": .01,
@@ -223,6 +243,7 @@ class PPO(Algorithm):
 			else:
 				self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
 		elif isinstance(self.env_act_space, spaces.Box):
+			assert len(self.env_act_space.shape) == 1, "Only one-dimensional action spaces currently supported!"
 			self.actions_type = "continuous"
 			self.action_space_low = torch.from_numpy(self.env_act_space.low).to(self.device)
 			self.action_space_high = torch.from_numpy(self.env_act_space.high).to(self.device)
@@ -251,11 +272,13 @@ class PPO(Algorithm):
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 		:param max_steps: maximum number of steps that can be done
 		"""
-		self.writer = SummaryWriter()
+		self.writer = SummaryWriter(
+			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+		)
 
 		episode = 0
 
-		buffer = Buffer(self.num_envs, self.horizon, self.env_obs_space.shape, self.actions_nb, self.device, self.action_mask_size)
+		buffer = Buffer(self.num_envs * self.num_agents, self.horizon, self.env_flat_obs_space.shape, self.actions_nb, self.device, self.action_mask_size)
 
 		print("==== STARTING TRAINING ====")
 
@@ -263,8 +286,8 @@ class PPO(Algorithm):
 		masks = new_masks = None
 		if self.env_uses_action_mask:
 			obs, masks = self._extract_mask_from_obs(obs)
-			masks = torch.from_numpy(masks).to(self.device)
-		obs = torch.from_numpy(obs).to(self.device)
+			masks = torch.from_numpy(masks).float().to(self.device)
+		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
 		for _ in tqdm(range(max_steps), desc="PPO Training"):
@@ -292,15 +315,15 @@ class PPO(Algorithm):
 			dones = dones + truncateds  # done or truncate
 			if self.env_uses_action_mask:
 				new_obs, new_masks = self._extract_mask_from_obs(new_obs)
-				new_masks = torch.from_numpy(new_masks).to(self.device)
-			new_obs = torch.from_numpy(new_obs).to(self.device)
+				new_masks = torch.from_numpy(new_masks).float().to(self.device)
+			new_obs = torch.from_numpy(self._flatten_obs(new_obs)).float().to(self.device)
 
 			buffer.push(
 				obs,
 				new_obs,
-				torch.from_numpy(dones).to(self.device).unsqueeze(1),
+				torch.from_numpy(dones).float().to(self.device).unsqueeze(1),
 				actions,
-				torch.from_numpy(rewards).to(self.device).unsqueeze(1),
+				torch.from_numpy(rewards).float().to(self.device).unsqueeze(1),
 				critic_output,
 				log_probs,
 				masks,
@@ -402,3 +425,13 @@ class PPO(Algorithm):
 			next_step_terminates = dones[t]
 
 		return advantages
+
+	def _flatten_obs(self, obs: np.ndarray) -> np.ndarray:
+		"""
+		Used to flatten the observations before passing it to the policies and the buffer
+		:param obs: observation to flatten
+		:return: the observation in one dimension
+		"""
+		return np.array([
+			spaces.flatten(self.env_obs_space, value) for value in obs
+		])

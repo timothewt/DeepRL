@@ -16,7 +16,7 @@ from tqdm import tqdm
 from algorithms.Algorithm import Algorithm
 from algorithms.ppo.Buffer import Buffer
 from models import FCNet
-from models import MaskedFCNet
+from models import FCNetMasked
 
 
 class PPOMasked(Algorithm):
@@ -127,7 +127,7 @@ class PPOMasked(Algorithm):
 			"output_function": nn.Softmax(dim=-1)
 		}
 
-		self.actor: nn.Module = MaskedFCNet(config=actor_config).to(self.device)
+		self.actor: nn.Module = FCNetMasked(config=actor_config).to(self.device)
 
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 

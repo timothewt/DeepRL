@@ -1,11 +1,14 @@
 import gymnasium as gym
 
+from algorithms.dqn import DQN, DQNMasked
 from algorithms.ppo import PPO
+from envs.snake import SnakeEnv
 
 if __name__ == "__main__":
 
-	algo = PPO(config={
-		"env_fn": lambda: gym.make("CartPole-v1"),
+	algo = DQNMasked(config={
+		# "env_fn": lambda: gym.make("CartPole-v0"),
+		"env_fn": lambda: SnakeEnv(),
 		"num_envs": 8,
 		# "device": device("cuda:0" if cuda.is_available() else "cpu"),
 		"actor_hidden_layers_nb": 2,

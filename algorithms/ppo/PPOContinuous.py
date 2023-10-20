@@ -14,6 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
+from algorithms.ppo.Buffer import Buffer
 from models import ActorContinuous
 from models import FCNet
 

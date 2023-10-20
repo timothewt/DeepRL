@@ -1,2 +1,4 @@
 # TODO: find a way to solve this DQN loss going to 0 using action masking
 # TODO: implement multi-discrete action space in PPO/A2C
+# TODO: add a CNN model
+# TODO: multi agents DQN

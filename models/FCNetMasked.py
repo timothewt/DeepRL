@@ -6,7 +6,7 @@ from torch import tensor, nn
 from models.FCNet import FCNet
 
 
-class MaskedFCNet(nn.Module):
+class FCNetMasked(nn.Module):
 
 	def __init__(self, config: dict[str: Any]):
 		"""
@@ -18,7 +18,7 @@ class MaskedFCNet(nn.Module):
 			activation_function: activation function used between the layers
 			output_function: function used at the output of the network
 		"""
-		super(MaskedFCNet, self).__init__()
+		super(FCNetMasked, self).__init__()
 
 		output_function = config.get("output_function", None)
 		if output_function is None:

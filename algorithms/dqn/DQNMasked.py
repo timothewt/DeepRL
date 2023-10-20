@@ -12,13 +12,13 @@ from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
 from algorithms.dqn.ReplayMemory import ReplayMemory
-from models import FCNet
+from models.FCNetMasked import FCNetMasked
 
 
-class DQN(Algorithm):
+class DQNMasked(Algorithm):
 	"""
-	Deep Q Network
-	Used for discrete action spaces only. For environments that use action masks, see DQNMasked.
+	Deep Q Network algorithm
+	Used for discrete action spaces only. The action mask has to be in the infos dict with the "action_mask" key.
 	"""
 	def __init__(self, config: dict):
 		"""
@@ -83,8 +83,8 @@ class DQN(Algorithm):
 			"hidden_size": self.hidden_size,
 		}
 
-		self.policy_network: nn.Module = FCNet(config=policy_config).to(self.device)
-		self.target_network: nn.Module = FCNet(config=policy_config).to(self.device)
+		self.policy_network: nn.Module = FCNetMasked(config=policy_config).to(self.device)
+		self.target_network: nn.Module = FCNetMasked(config=policy_config).to(self.device)
 		self.target_network.load_state_dict(self.policy_network.state_dict())
 
 		self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=self.lr)
@@ -93,7 +93,7 @@ class DQN(Algorithm):
 	def train(self, max_steps: int) -> None:
 		"""
 		Trains the algorithm on the chosen environment
-		:param max_steps: maximum number of steps for the whole training process
+		:param max_steps: maximum number of steps that can be done
 		"""
 		self.writer = SummaryWriter(
 			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
@@ -122,14 +122,14 @@ class DQN(Algorithm):
 		episode = 0
 		step = 0
 		steps_before_target_network_update = self.target_network_update_frequency
-		replay_memory = ReplayMemory(self.max_replay_buffer_size, self.env_flat_obs_space.shape)
+		replay_memory = ReplayMemory(self.max_replay_buffer_size, self.env_flat_obs_space.shape, self.env_act_space.n)
 
 		pbar = tqdm(desc="DQN Training", total=max_steps)
 		print("==== STARTING TRAINING ====")
 
 		while step <= max_steps:
-			obs, _ = self.env.reset()
-			obs = self._flatten_obs(obs)
+			obs, infos = self.env.reset()
+			mask = self._extract_action_mask_from_infos(infos).cpu().numpy()
 			done = False
 			episode_rewards = 0
 
@@ -140,14 +140,15 @@ class DQN(Algorithm):
 				else:
 					with torch.no_grad():
 						action = torch.argmax(
-							self.policy_network(tensor(obs, device=self.device))
+							self.policy_network(tensor(obs, device=self.device), tensor(mask, device=self.device))
 						).item()
 
-				new_obs, reward, terminated, truncated, _ = self.env.step(action)
-				new_obs = self._flatten_obs(new_obs)
+				new_obs, reward, terminated, truncated, new_infos = self.env.step(action)
 				done = terminated or truncated
-				replay_memory.push(obs, action, reward, new_obs, done)
+				new_mask = self._extract_action_mask_from_infos(new_infos).cpu().numpy()
+				replay_memory.push(obs, action, reward, new_obs, done, mask, new_mask)
 				obs = new_obs
+				mask = new_mask
 				episode_rewards += reward
 				step += 1
 				pbar.update(1)
@@ -174,20 +175,27 @@ class DQN(Algorithm):
 		:replay_memory: replay memory buffer from which we sample experiences
 		:param step: current step
 		"""
-		states, actions, rewards, next_states, are_terminals, _, _ = replay_memory.sample(self.batch_size)
+		states, actions, rewards, next_states, are_terminals, masks, next_masks = replay_memory.sample(self.batch_size)
 
 		states = torch.from_numpy(states).float().to(self.device)
 		actions = torch.from_numpy(actions).long().to(self.device)
 		rewards = torch.from_numpy(rewards).float().to(self.device)
 		next_states = torch.from_numpy(next_states).float().to(self.device)
 		are_terminals = torch.from_numpy(are_terminals).float().to(self.device)
+		masks = torch.from_numpy(masks).float().to(self.device)
+		next_masks = torch.from_numpy(next_masks).float().to(self.device)
 
-		predictions = self.policy_network(states).gather(dim=1, index=actions.unsqueeze(1))
+		predictions = torch.clamp(
+			self.policy_network(states, masks).gather(dim=1, index=actions.unsqueeze(1)),
+			min=-1e6
+		)
 
 		with torch.no_grad():
-			target = (
-					rewards + self.gamma * self.target_network(next_states).max(1)[0] * (1 - are_terminals)
-			).unsqueeze(1)
+			target = torch.clamp((
+						rewards + self.gamma * self.target_network(next_states, next_masks).max(1)[0] * (1 - are_terminals)
+				).unsqueeze(1),
+				min=-1e6
+			)
 
 		self.optimizer.zero_grad()
 		loss = (predictions - target).pow(2).mean()

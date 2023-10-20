@@ -40,7 +40,7 @@ Any Gymnasium Env or PettingZoo ParallelEnv can be used.
 
 ## Authors
 
-Timothé Watteau (@timothewt)
+* Timothé Watteau (@timothewt)
 
 ## License
 

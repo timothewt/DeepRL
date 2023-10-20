@@ -13,7 +13,7 @@ API, or multi-agents using the PettingZoo Parallel API. Most algorithms also sup
 
 ## Getting Started
 
-### Installation
+### Technologies used
 
 * Python>=3.10
 * PyTorch
@@ -26,8 +26,8 @@ API, or multi-agents using the PettingZoo Parallel API. Most algorithms also sup
 ### Algorithms
 
 The following algorithms are currently available:
-* PPO (discrete [supports action masking] and continuous action)
-* A2C (discrete [supports action masking] and continuous action)
+* PPO (discrete [supports action masking] and continuous actions)
+* A2C (discrete [supports action masking] and continuous actions)
 * DQN (discrete actions)
 
 ### Environments

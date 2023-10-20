@@ -3,133 +3,32 @@ from typing import Any
 
 import gymnasium as gym
 import numpy as np
+import supersuit as ss
 import torch
 from gymnasium import spaces
 from gymnasium.vector import AsyncVectorEnv
+from pettingzoo import ParallelEnv
 from torch import nn, tensor
 from torch.utils.tensorboard import SummaryWriter
-from torch.distributions import Categorical, Normal
+from torch.distributions import Normal
 from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
+from algorithms.a2c.Buffer import Buffer
 from models.ActorContinuous import ActorContinuous
-from models.FCNet import FCNet
-from models.MaskedFCNet import MaskedFCNet
+from models import FCNet
 
 
-class Buffer:
+class A2CContinuous(Algorithm):
 	"""
-	Memory buffer used for A2C
+	Synchronous Advantage Actor-Critic
+	Used for continuous action spaces.
+	Environment can either be a gymnasium.Env or a pettingzoo.ParallelEnv.
 	"""
-	def __init__(
-			self,
-			num_envs: int,
-			max_len: int = 5,
-			state_shape: tuple[int] = (1,),
-			actions_nb: int = 1,
-			device: torch.device = torch.device("cpu"),
-	):
-		"""
-		Initialization of the buffer
-		:param num_envs: number of parallel environments
-		:param max_len: maximum length of the buffer, typically the t_max value for A2C
-		:param state_shape: shape of the state given to the policy
-		:param actions_nb: number of possible actions (1 for discrete and n for continuous)
-		:param device: device used by PyTorch
-		"""
-		self.states = torch.empty((max_len, num_envs) + state_shape, device=device)
-		self.next_states = torch.empty((max_len, num_envs) + state_shape, device=device)
-		self.dones = torch.empty((max_len, num_envs, 1), device=device)
-		self.actions = torch.empty((max_len, num_envs, actions_nb), device=device)
-		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
-		self.values = torch.empty((max_len, num_envs, 1), device=device)
-		self.log_probs = torch.empty((max_len, num_envs, actions_nb), device=device)
-		self.entropies = torch.empty((max_len, num_envs, actions_nb), device=device)
-
-		self.num_envs = num_envs
-		self.state_shape = state_shape
-		self.actions_nb = actions_nb
-		self.max_len = max_len
-		self.device = device
-		self.i = 0
-
-	def is_full(self) -> bool:
-		"""
-		Checks if the buffer is full
-		:return: True if the buffer is full False otherwise
-		"""
-		return self.i == self.max_len
-
-	def push(
-			self,
-			states: np.ndarray,
-			next_states: np.ndarray,
-			dones: bool,
-			actions: int,
-			rewards: float,
-			values: float,
-			log_probs: float,
-			entropies: float,
-	) -> None:
-		"""
-		Pushes new values in the buffer of shape (num_env, data_shape)
-		:param states: states of each environment
-		:param next_states: next states after this step
-		:param dones: if the step led to a termination
-		:param actions: actions made by the agents
-		:param rewards: rewards given for this action
-		:param values: critic policy value
-		:param log_probs: log probability of the actions
-		:param entropies: entropies of the distributions
-		"""
-		assert self.i < self.max_len, "Buffer is full!"
-
-		self.states[self.i] = states
-		self.next_states[self.i] = next_states
-		self.dones[self.i] = dones
-		self.actions[self.i] = actions
-		self.rewards[self.i] = rewards
-		self.values[self.i] = values
-		self.log_probs[self.i] = log_probs
-		self.entropies[self.i] = entropies
-
-		self.i += 1
-
-	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
-		"""
-		Gives all the values of the buffer
-		:return: all buffer tensors
-		"""
-		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs, self.entropies
-
-	def get_all_flattened(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
-		"""
-		Gives all the buffer values as flattened tensors
-		:return: all buffer tensors flattened
-		"""
-		return self.states.view((self.max_len * self.num_envs,) + self.state_shape), \
-			self.next_states.view((self.max_len * self.num_envs,) + self.state_shape), \
-			self.dones.flatten(), \
-			self.actions.flatten(end_dim=1), \
-			self.rewards.flatten(), \
-			self.values.flatten(), \
-			self.log_probs.flatten(end_dim=1), \
-			self.entropies.flatten(end_dim=1)
-
-	def reset(self) -> None:
-		self.values = torch.empty((self.max_len, self.num_envs, 1), device=self.device)
-		self.log_probs = torch.empty((self.max_len, self.num_envs, self.actions_nb), device=self.device)
-		self.entropies = torch.empty((self.max_len, self.num_envs, self.actions_nb), device=self.device)
-		self.i = 0
-
-
-class A2C(Algorithm):
-
 	def __init__(self, config: dict[str | Any]):
 		"""
 		:param config:
 			env_fn (Callable[[], gymnasium.Env]): function returning a Gymnasium environment
-			env_uses_action_mask (bool): tells if the environment outputs an action mask in its observations
 			num_envs (int): number of environments in parallel
 			device (torch.device): device used (cpu, gpu)
 
@@ -155,11 +54,24 @@ class A2C(Algorithm):
 
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
-		self.env = self.env_fn()
-		self.num_envs = max(config.get("num_envs", 1), 1)
-		self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
+		self.env: gym.Env | ParallelEnv = self.env_fn()
 
-		self.env_uses_action_mask = config.get("env_uses_action_mask", False)
+		assert isinstance(self.env, gym.Env) or isinstance(self.env, ParallelEnv), \
+			"Only gymnasium.Env and pettingzoo.ParallelEnv are currently supported."
+		self.is_multi_agents = isinstance(self.env, ParallelEnv)
+		self.num_envs = max(config.get("num_envs", 1), 1)
+		self.num_agents = 1
+		if self.is_multi_agents:
+			# pad observations of done agents
+			self.num_agents = len(self.env.possible_agents)
+			self.envs: ss.ConcatVecEnv = ss.concat_vec_envs_v1(
+				ss.pettingzoo_env_to_vec_env_v1(ss.multiagent_wrappers.black_death_v3(self.env)),
+				self.num_envs
+			)
+			self.env_act_space = self.envs.action_space
+		else:
+			self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
+			self.env_act_space = self.envs.single_action_space
 
 		# Stats
 
@@ -176,12 +88,8 @@ class A2C(Algorithm):
 
 		# Policies
 
-		self.env_act_space = self.envs.single_action_space
-		self.action_mask_size = 1
-		if self.env_uses_action_mask:
-			assert isinstance(self.env_act_space, spaces.Discrete)
-			self.env_obs_space = self.envs.single_observation_space["real_obs"]
-			self.action_mask_size = self.env_act_space.n
+		if self.is_multi_agents:
+			self.env_obs_space = self.envs.observation_space
 		else:
 			self.env_obs_space = self.envs.single_observation_space
 		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
@@ -199,22 +107,11 @@ class A2C(Algorithm):
 			"output_layer_std": .01,
 		}
 
-		if isinstance(self.env_act_space, spaces.Discrete):
-			self.actions_type = "discrete"
-			actor_config["output_size"] = self.env_act_space.n
-			actor_config["output_function"] = nn.Softmax(dim=-1)
-			if self.env_uses_action_mask:
-				self.actor: nn.Module = MaskedFCNet(config=actor_config).to(self.device)
-			else:
-				self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
-		elif isinstance(self.env_act_space, spaces.Box):
-			self.actions_type = "continuous"
-			self.action_space_low = torch.from_numpy(self.env_act_space.low).to(self.device)
-			self.action_space_high = torch.from_numpy(self.env_act_space.high).to(self.device)
-			actor_config["actions_nb"] = self.actions_nb = int(np.prod(self.env_act_space.shape))
-			self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
-		else:
-			raise NotImplementedError("Only Discrete or Box action spaces currently supported.")
+		assert isinstance(self.env_act_space, spaces.Box), "Action space needs to be continuous (spaces.Box)!"
+		self.action_space_low = torch.from_numpy(self.env_act_space.low).to(self.device)
+		self.action_space_high = torch.from_numpy(self.env_act_space.high).to(self.device)
+		actor_config["actions_nb"] = self.actions_nb = int(np.prod(self.env_act_space.shape))
+		self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
 
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
@@ -263,43 +160,22 @@ class A2C(Algorithm):
 		print("==== STARTING TRAINING ====")
 
 		obs, infos = self.envs.reset()
-		masks = new_masks = None
-		if self.env_uses_action_mask:
-			masks = torch.from_numpy(
-				np.stack(infos["action_mask"])
-			).float().to(self.device)
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
 		for _ in tqdm(range(max_steps), desc="A2C Training"):
-			if self.env_uses_action_mask:
-				actor_output = self.actor(obs, masks)
-			else:
-				actor_output = self.actor(obs)
+			actor_output = self.actor(obs)
 			critic_output = self.critic(obs)  # value function
 
-			if self.actions_type == "continuous":
-				means, std = actor_output
-				dist = Normal(loc=means, scale=std)
-				actions = dist.sample()
-				actions_to_input = self._scale_to_action_space(actions).cpu().numpy()
-				log_probs = dist.log_prob(actions)
-				entropies = dist.entropy()
-			else:  # discrete
-				probs = actor_output
-				dist = Categorical(probs=probs)
-				actions = dist.sample()
-				actions_to_input = actions.cpu().numpy()
-				log_probs = dist.log_prob(actions).unsqueeze(1)
-				actions = actions.unsqueeze(1)
-				entropies = dist.entropy().unsqueeze(1)
+			means, std = actor_output
+			dist = Normal(loc=means, scale=std)
+			actions = dist.sample()
+			actions_to_input = self._scale_to_action_space(actions).cpu().numpy()
+			log_probs = dist.log_prob(actions)
+			entropies = dist.entropy()
 
 			new_obs, rewards, dones, truncateds, new_infos = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
-			if self.env_uses_action_mask:
-				new_masks = torch.from_numpy(
-					np.stack(new_infos["action_mask"])
-				).float().to(self.device)
 			new_obs = torch.from_numpy(self._flatten_obs(new_obs)).float().to(self.device)
 
 			buffer.push(
@@ -314,7 +190,6 @@ class A2C(Algorithm):
 			)
 
 			obs = new_obs
-			masks = new_masks
 
 			if buffer.is_full():
 				self.update_networks(buffer)

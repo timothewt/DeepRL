@@ -1,7 +1,6 @@
 from typing import Any
 
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from models.FCNet import FCNet

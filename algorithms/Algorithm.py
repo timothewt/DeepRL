@@ -12,6 +12,8 @@ class Algorithm:
 		self.config = config
 
 		self.num_envs = 1
+		self.is_multi_agents = False
+		self.device = torch.device("cpu")
 		self.action_space_low = tensor([0])
 		self.action_space_high = tensor([0])
 		self.env_obs_space = spaces.Space()
@@ -45,6 +47,18 @@ class Algorithm:
 			return np.array([
 				spaces.flatten(self.env_obs_space, value) for value in obs
 			])
+
+	def _extract_action_mask_from_infos(self, infos: dict | list) -> tensor:
+		if self.is_multi_agents:
+			# Issue: no infos on dead agent => KeyError
+			return torch.from_numpy(np.array(
+				[agent_info["action_mask"] for agent_info in infos]
+			)).float().to(self.device)
+		else:
+			return torch.from_numpy(
+				np.stack(infos["action_mask"])
+			).float().to(self.device)
+
 
 	@staticmethod
 	def dict2mdtable(d: dict[str: float], key: str = 'Name', val: str = 'Value'):

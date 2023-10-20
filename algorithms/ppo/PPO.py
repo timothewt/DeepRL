@@ -9,13 +9,12 @@ from gymnasium import spaces
 from gymnasium.vector.async_vector_env import AsyncVectorEnv
 from pettingzoo import ParallelEnv
 from torch import nn, tensor
-from torch.distributions import Normal
+from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
-from models.ActorContinuous import ActorContinuous
-from models.FCNet import FCNet
+from models import FCNet
 
 
 class Buffer:
@@ -35,7 +34,7 @@ class Buffer:
 		:param num_envs: number of parallel environments
 		:param max_len: maximum length of the buffer, typically the PPO horizon parameter
 		:param state_shape: shape of the state given to the policy
-		:param actions_nb: number of possible actions (1 for discrete and n for continuous)
+		:param actions_nb: number of possible actions
 		:param device: device used by PyTorch
 		"""
 		self.states = torch.empty((max_len, num_envs, np.prod(state_shape)), device=device)
@@ -118,13 +117,13 @@ class Buffer:
 		self.i = 0
 
 
-class PPOContinuous(Algorithm):
+class PPO(Algorithm):
 	"""
 	Proximal Policy Optimization
-	Used for continuous action spaces.
+	Used for discrete action spaces without action mask.
+	For continuous action spaces, use PPOContinuous, and for masked	discrete action spaces use PPOMasked.
 	Environment can either be a gymnasium.Env or a pettingzoo.ParallelEnv.
 	"""
-
 	def __init__(self, config: dict[str: Any]):
 		"""
 		:param config:
@@ -161,7 +160,6 @@ class PPOContinuous(Algorithm):
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
 		self.env: gym.Env | ParallelEnv = self.env_fn()
-
 		assert isinstance(self.env, gym.Env) or isinstance(self.env, ParallelEnv), \
 			"Only gymnasium.Env and pettingzoo.ParallelEnv are currently supported."
 		self.is_multi_agents = isinstance(self.env, ParallelEnv)
@@ -171,13 +169,15 @@ class PPOContinuous(Algorithm):
 			# pad observations of done agents
 			self.num_agents = len(self.env.possible_agents)
 			self.envs: ss.ConcatVecEnv = ss.concat_vec_envs_v1(
-				ss.pettingzoo_env_to_vec_env_v1(ss.multiagent_wrappers.black_death_v3(self.env)),
+				ss.pettingzoo_env_to_vec_env_v1(self.env),
 				self.num_envs
 			)
 			self.env_act_space = self.envs.action_space
 		else:
 			self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
 			self.env_act_space = self.envs.single_action_space
+		assert isinstance(self.env_act_space, spaces.Discrete), \
+			"Only discrete action spaces are supported. For continuous spaces, see PPOContinuous"
 
 		# Stats
 
@@ -204,6 +204,7 @@ class PPOContinuous(Algorithm):
 		self.minibatch_nb_per_batch = self.batch_size // self.minibatch_size
 
 		# Policies
+
 		if self.is_multi_agents:
 			self.env_obs_space = self.envs.observation_space
 		else:
@@ -218,16 +219,12 @@ class PPOContinuous(Algorithm):
 
 		actor_config = {
 			"input_size": np.prod(self.env_flat_obs_space.shape),
-			"hidden_layers_nb": self.actor_hidden_layers_nb,
-			"hidden_size": self.actor_hidden_size,
-			"output_layer_std": .01,
+			"hidden_layers_nb": self.actor_hidden_layers_nb, "hidden_size": self.actor_hidden_size,
+			"output_layer_std": .01, "output_size": self.env_act_space.n,
+			"output_function": nn.Softmax(dim=-1)
 		}
 
-		assert isinstance(self.env_act_space, spaces.Box), "Action space needs to be continuous (spaces.Box)!"
-		self.action_space_low = torch.from_numpy(self.env_act_space.low).to(self.device)
-		self.action_space_high = torch.from_numpy(self.env_act_space.high).to(self.device)
-		actor_config["actions_nb"] = self.actions_nb = int(np.prod(self.env_act_space.shape))
-		self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
+		self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
 
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
@@ -247,7 +244,7 @@ class PPOContinuous(Algorithm):
 		"""
 		Trains the algorithm on the chosen environment
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
-		:param max_steps: maximum number of steps that can be done
+		:param max_steps: maximum number of steps for the whole training process
 		"""
 		self.writer = SummaryWriter(
 			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
@@ -293,11 +290,12 @@ class PPOContinuous(Algorithm):
 		for _ in tqdm(range(max_steps), desc="PPO Training"):
 			critic_output = self.critic(obs)  # value function
 
-			means, std = self.actor(obs)
-			dist = Normal(loc=means, scale=std)
+			probs = self.actor(obs)
+			dist = Categorical(probs=probs)
 			actions = dist.sample()
-			actions_to_input = self._scale_to_action_space(actions).cpu().numpy()
-			log_probs = dist.log_prob(actions)
+			actions_to_input = actions.cpu().numpy()
+			log_probs = dist.log_prob(actions).unsqueeze(1)
+			actions = actions.unsqueeze(1)
 
 			new_obs, rewards, dones, truncateds, new_infos = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
@@ -334,6 +332,7 @@ class PPOContinuous(Algorithm):
 		"""
 		states, _, _, actions, rewards, values, old_log_probs = buffer.get_all_flattened()
 		values, old_log_probs = values.detach().view(self.batch_size, 1), old_log_probs.detach()
+		actions = actions.view(self.batch_size)
 
 		advantages = self._compute_advantages(buffer, self.gamma, self.gae_lambda).flatten(end_dim=1)
 		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -347,8 +346,8 @@ class PPOContinuous(Algorithm):
 				end = start + self.minibatch_size
 				minibatch_indices = indices[start:end]
 
-				means, stds = self.actor(states[minibatch_indices])
-				new_dist = Normal(loc=means, scale=stds)
+				probs = self.actor(states[minibatch_indices])
+				new_dist = Categorical(probs=probs)
 
 				new_log_probs = new_dist.log_prob(actions[minibatch_indices]).view(self.minibatch_size, self.actions_nb)
 				new_entropy = new_dist.entropy()
@@ -399,3 +398,14 @@ class PPOContinuous(Algorithm):
 			next_step_terminates = dones[t]
 
 		return advantages
+
+	def _extract_action_mask_from_infos(self, infos: dict | list) -> tensor:
+		if self.is_multi_agents:
+			# Issue: no infos on dead agent => KeyError
+			return torch.from_numpy(np.array(
+				[agent_info["action_mask"] for agent_info in infos]
+			)).float().to(self.device)
+		else:
+			return torch.from_numpy(
+				np.stack(infos["action_mask"])
+			).float().to(self.device)

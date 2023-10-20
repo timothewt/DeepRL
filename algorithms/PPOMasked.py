@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
 from models.FCNet import FCNet
+from models.MaskedFCNet import MaskedFCNet
 
 
 class Buffer:
@@ -28,6 +29,7 @@ class Buffer:
 			state_shape: tuple[int] = (1,),
 			actions_nb: int = 1,
 			device: torch.device = torch.device("cpu"),
+			action_mask_size: int = 1
 	):
 		"""
 		Initialization of the buffer
@@ -36,6 +38,7 @@ class Buffer:
 		:param state_shape: shape of the state given to the policy
 		:param actions_nb: number of possible actions (1 for discrete and n for continuous)
 		:param device: device used by PyTorch
+		:param action_mask_size: size of the action mask, corresponding to the size of the Discrete action space
 		"""
 		self.states = torch.empty((max_len, num_envs, np.prod(state_shape)), device=device)
 		self.next_states = torch.empty((max_len, num_envs, np.prod(state_shape)), device=device)
@@ -44,6 +47,7 @@ class Buffer:
 		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
 		self.values = torch.empty((max_len, num_envs, 1), device=device)
 		self.log_probs = torch.empty((max_len, num_envs, actions_nb), device=device)
+		self.action_masks = torch.empty((max_len, num_envs, action_mask_size), device=device)
 
 		self.num_envs = num_envs
 		self.state_shape = state_shape
@@ -67,6 +71,7 @@ class Buffer:
 			rewards: tensor,
 			values: tensor,
 			log_probs: tensor,
+			action_mask: tensor = None,
 	) -> None:
 		"""
 		Pushes new values in the buffer of shape (num_env, data_shape)
@@ -77,6 +82,7 @@ class Buffer:
 		:param rewards: rewards given for this action
 		:param values: critic policy value
 		:param log_probs: log probability of the actions
+		:param action_mask: action mask used in some environments
 		"""
 		assert self.i < self.max_len, "Buffer is full!"
 
@@ -87,17 +93,19 @@ class Buffer:
 		self.rewards[self.i] = rewards
 		self.values[self.i] = values
 		self.log_probs[self.i] = log_probs
+		if action_mask is not None:
+			self.action_masks[self.i] = action_mask
 
 		self.i += 1
 
-	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+	def get_all(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
 		"""
 		Gives all the values of the buffer
 		:return: all buffer tensors
 		"""
-		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs
+		return self.states, self.next_states, self.dones, self.actions, self.rewards, self.values, self.log_probs, self.action_masks
 
-	def get_all_flattened(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
+	def get_all_flattened(self) -> tuple[tensor, tensor, tensor, tensor, tensor, tensor, tensor, tensor]:
 		"""
 		Gives all the buffer values as flattened tensors
 		:return: all buffer tensors flattened
@@ -108,7 +116,8 @@ class Buffer:
 			self.actions.flatten(end_dim=1), \
 			self.rewards.flatten(), \
 			self.values.flatten(), \
-			self.log_probs.flatten(end_dim=1),
+			self.log_probs.flatten(end_dim=1), \
+			self.action_masks.flatten(end_dim=1)
 
 	def reset(self) -> None:
 		"""
@@ -117,12 +126,11 @@ class Buffer:
 		self.i = 0
 
 
-class PPO(Algorithm):
+class PPOMasked(Algorithm):
 	"""
 	Proximal Policy Optimization
-	Used for discrete action spaces without action mask.
-	For continuous action spaces, use PPOContinuous, and for masked	discrete action spaces use PPOMasked.
-	Environment can either be a gymnasium.Env or a pettingzoo.ParallelEnv.
+	Used for discrete action spaces with an action mask. The action mask has to be in the
+	infos dict, with the "action_mask" key.
 	"""
 
 	def __init__(self, config: dict[str: Any]):
@@ -161,6 +169,7 @@ class PPO(Algorithm):
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
 		self.env: gym.Env | ParallelEnv = self.env_fn()
+
 		assert isinstance(self.env, gym.Env) or isinstance(self.env, ParallelEnv), \
 			"Only gymnasium.Env and pettingzoo.ParallelEnv are currently supported."
 		self.is_multi_agents = isinstance(self.env, ParallelEnv)
@@ -177,8 +186,6 @@ class PPO(Algorithm):
 		else:
 			self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
 			self.env_act_space = self.envs.single_action_space
-		assert isinstance(self.env_act_space, spaces.Discrete), \
-			"Only discrete action spaces are supported. For continuous spaces, see PPOContinuous"
 
 		# Stats
 
@@ -205,6 +212,8 @@ class PPO(Algorithm):
 		self.minibatch_nb_per_batch = self.batch_size // self.minibatch_size
 
 		# Policies
+		assert isinstance(self.env_act_space, spaces.Discrete), "Action mask only supported in Discrete action spaces!"
+		self.action_mask_size = self.env_act_space.n
 		if self.is_multi_agents:
 			self.env_obs_space = self.envs.observation_space
 		else:
@@ -224,7 +233,7 @@ class PPO(Algorithm):
 			"output_function": nn.Softmax(dim=-1)
 		}
 
-		self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
+		self.actor: nn.Module = MaskedFCNet(config=actor_config).to(self.device)
 
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
@@ -279,18 +288,20 @@ class PPO(Algorithm):
 
 		episode = 0
 
-		buffer = Buffer(self.num_envs * self.num_agents, self.horizon, self.env_flat_obs_space.shape, self.actions_nb, self.device)
+		buffer = Buffer(self.num_envs * self.num_agents, self.horizon, self.env_flat_obs_space.shape, self.actions_nb, self.device, self.action_mask_size)
 
 		print("==== STARTING TRAINING ====")
 
 		obs, infos = self.envs.reset()
+		masks = self._extract_action_mask_from_infos(infos)
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
 		for _ in tqdm(range(max_steps), desc="PPO Training"):
+			actor_output = self.actor(obs, masks)
 			critic_output = self.critic(obs)  # value function
 
-			probs = self.actor(obs)
+			probs = actor_output
 			dist = Categorical(probs=probs)
 			actions = dist.sample()
 			actions_to_input = actions.cpu().numpy()
@@ -299,6 +310,7 @@ class PPO(Algorithm):
 
 			new_obs, rewards, dones, truncateds, new_infos = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
+			new_masks = self._extract_action_mask_from_infos(new_infos)
 			new_obs = torch.from_numpy(self._flatten_obs(new_obs)).float().to(self.device)
 
 			buffer.push(
@@ -309,9 +321,11 @@ class PPO(Algorithm):
 				torch.from_numpy(rewards).float().to(self.device).unsqueeze(1),
 				critic_output,
 				log_probs,
+				masks,
 			)
 
 			obs = new_obs
+			masks = new_masks
 
 			if buffer.is_full():
 				self._update_networks(buffer)
@@ -330,7 +344,7 @@ class PPO(Algorithm):
 		Updates the actor and critic networks according to the PPO paper
 		:param buffer: complete buffer of experiences
 		"""
-		states, _, _, actions, rewards, values, old_log_probs = buffer.get_all_flattened()
+		states, _, _, actions, rewards, values, old_log_probs, action_masks = buffer.get_all_flattened()
 		values, old_log_probs = values.detach().view(self.batch_size, 1), old_log_probs.detach()
 		actions = actions.view(self.batch_size)
 
@@ -346,7 +360,7 @@ class PPO(Algorithm):
 				end = start + self.minibatch_size
 				minibatch_indices = indices[start:end]
 
-				probs = self.actor(states[minibatch_indices])
+				probs = self.actor(states[minibatch_indices], action_masks[minibatch_indices])
 				new_dist = Categorical(probs=probs)
 
 				new_log_probs = new_dist.log_prob(actions[minibatch_indices]).view(self.minibatch_size, self.actions_nb)
@@ -383,7 +397,7 @@ class PPO(Algorithm):
 		:param gae_lambda: lambda parameter of the GAE
 		:return: the advantages for each timestep as a tensor
 		"""
-		_, next_states, dones, _, rewards, values, _ = buffer.get_all()
+		_, next_states, dones, _, rewards, values, _, _ = buffer.get_all()
 
 		next_values = values.roll(-1, dims=0)
 		next_values[-1] = self.critic(next_states[-1])

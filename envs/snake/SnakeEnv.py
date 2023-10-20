@@ -3,7 +3,7 @@ from typing import Any
 
 import gymnasium as gym
 import numpy as np
-from gymnasium.spaces import Box, Discrete, Dict
+from gymnasium import spaces
 
 
 class SnakeEnv(gym.Env):
@@ -20,12 +20,13 @@ class SnakeEnv(gym.Env):
 		self.snake: list[tuple[int, int]] = [(0, 0)]  # snake's head is the first element of the list
 		self.score: int = 0
 
-		self.action_space = Discrete(4)  # up, right, down, left
-		self.observation_space = Dict({
-			"head": Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
-			"food": Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
-			"closest_obstacles": Box(0, max(self.width, self.height), (4,), dtype=np.float32),
+		self.action_space = spaces.Discrete(4)  # up, right, down, left
+		self.real_obs_space = spaces.Dict({
+			"head": spaces.Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
+			"food": spaces.Box(0, np.array([self.width, self.height]), (2,), dtype=np.float32),
+			"closest_obstacles": spaces.Box(0, max(self.width, self.height), (4,), dtype=np.float32),
 		})
+		self.observation_space = spaces.flatten_space(self.real_obs_space)
 
 		self.render_mode: str | None = render_mode
 
@@ -38,6 +39,7 @@ class SnakeEnv(gym.Env):
 	def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
 
 		curr_x, curr_y = self.snake[0][0], self.snake[0][1]
+		prev_distance_to_food = np.linalg.norm(np.array([curr_x - self.food[0], curr_y - self.food[1]]))
 		match action:
 			case 0:
 				new_head = (curr_x, curr_y - 1)
@@ -47,10 +49,12 @@ class SnakeEnv(gym.Env):
 				new_head = (curr_x, curr_y + 1)
 			case _:
 				new_head = (curr_x - 1, curr_y)
+		distance_to_food = np.linalg.norm(np.array([new_head[0] - self.food[0], new_head[1] - self.food[1]]))
 
 		truncated = new_head in self.snake or not 0 <= new_head[0] < self.width or not 0 <= new_head[1] < self.width
 
 		ate_food = new_head == self.food
+		got_closer_to_food = prev_distance_to_food > distance_to_food
 		if ate_food:
 			self._place_food()
 		else:
@@ -58,7 +62,7 @@ class SnakeEnv(gym.Env):
 		self.snake.insert(0, new_head)
 
 		obs = self._get_obs()
-		reward = self._get_reward(ate_food, truncated)
+		reward = self._get_reward(truncated, ate_food, got_closer_to_food)
 		terminated = len(self.snake) == self.grid_dimension
 
 		return obs, reward, terminated, truncated, {"action_mask": self._get_action_mask()}
@@ -83,20 +87,22 @@ class SnakeEnv(gym.Env):
 		pass
 
 	@staticmethod
-	def _get_reward(truncated: bool, ate_food: bool) -> float:
-		if ate_food:
-			return 10
-		elif truncated:
+	def _get_reward(truncated: bool, ate_food: bool, got_closer_to_food: bool) -> float:
+		if truncated:
 			return -50
+		elif ate_food:
+			return 10
+		elif got_closer_to_food:
+			return .2
 		else:
-			return .5
+			return -.2
 
 	def _get_obs(self) -> dict[str: np.ndarray]:
-		return {
+		return spaces.flatten(self.real_obs_space, {
 			"head": np.array(self.snake[0]),
 			"food": np.array(self.food),
 			"closest_obstacles": np.array(self._get_distances_to_closest_obstacles(), dtype=np.float32),
-		}
+		})
 
 	def _get_distances_to_closest_obstacles(self) -> tuple[float, float, float, float]:
 		curr_x, curr_y = self.snake[0][0], self.snake[0][1]
@@ -129,10 +135,10 @@ class SnakeEnv(gym.Env):
 		mask = np.ones((4,), dtype=np.float32)
 		if len(self.snake) == 1:
 			return mask
-		mask[0] = (curr_x, curr_y - 1) == self.snake[1]
-		mask[1] = (curr_x + 1, curr_y) == self.snake[1]
-		mask[2] = (curr_x, curr_y + 1) == self.snake[1]
-		mask[3] = (curr_x - 1, curr_y) == self.snake[1]
+		mask[0] = (curr_x, curr_y - 1) != self.snake[1]
+		mask[1] = (curr_x + 1, curr_y) != self.snake[1]
+		mask[2] = (curr_x, curr_y + 1) != self.snake[1]
+		mask[3] = (curr_x - 1, curr_y) != self.snake[1]
 		return mask
 
 	def _place_food(self) -> None:

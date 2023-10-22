@@ -18,7 +18,7 @@ from models import FCNet
 class DQN(Algorithm):
 	"""
 	Deep Q Network
-	Used for discrete action spaces only. For environments that use action masks, see DQNMasked.
+	Used for discrete action spaces only.
 	"""
 	def __init__(self, config: dict):
 		"""
@@ -50,6 +50,7 @@ class DQN(Algorithm):
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
 		self.env: gym.Env = self.env_fn()
+		assert isinstance(self.env, gym.Env), "Only gym.Env environments currently supported!"
 
 		# Stats
 
@@ -83,11 +84,11 @@ class DQN(Algorithm):
 			"hidden_size": self.hidden_size,
 		}
 
-		self.policy_network: nn.Module = FCNet(config=policy_config).to(self.device)
-		self.target_network: nn.Module = FCNet(config=policy_config).to(self.device)
-		self.target_network.load_state_dict(self.policy_network.state_dict())
+		self.policy: nn.Module = FCNet(config=policy_config).to(self.device)
+		self.policy_target: nn.Module = FCNet(config=policy_config).to(self.device)
+		self.policy_target.load_state_dict(self.policy.state_dict())
 
-		self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=self.lr)
+		self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=self.lr)
 		self.loss_fn: nn.MSELoss = nn.MSELoss()
 
 	def train(self, max_steps: int) -> None:
@@ -96,7 +97,7 @@ class DQN(Algorithm):
 		:param max_steps: maximum number of steps for the whole training process
 		"""
 		self.writer = SummaryWriter(
-			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/DQN-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",
@@ -140,7 +141,7 @@ class DQN(Algorithm):
 				else:
 					with torch.no_grad():
 						action = torch.argmax(
-							self.policy_network(tensor(obs, device=self.device))
+							self.policy(tensor(obs, device=self.device))
 						).item()
 
 				new_obs, reward, terminated, truncated, _ = self.env.step(action)
@@ -158,12 +159,12 @@ class DQN(Algorithm):
 				self._update_networks(replay_memory, step)
 
 				if steps_before_target_network_update == 0:
-					self.target_network.load_state_dict(self.policy_network.state_dict())
+					self.policy_target.load_state_dict(self.policy.state_dict())
 					steps_before_target_network_update = self.target_network_update_frequency
 
 				steps_before_target_network_update -= 1
 
-			self.writer.add_scalar("Stats/Reward", episode_rewards, episode)
+			self.writer.add_scalar("Stats/Rewards", episode_rewards, episode)
 			episode += 1
 
 		print("==== TRAINING COMPLETE ====")
@@ -174,7 +175,7 @@ class DQN(Algorithm):
 		:replay_memory: replay memory buffer from which we sample experiences
 		:param step: current step
 		"""
-		states, actions, rewards, next_states, are_terminals, _, _ = replay_memory.sample(self.batch_size)
+		states, actions, rewards, next_states, are_terminals = replay_memory.sample(self.batch_size)
 
 		states = torch.from_numpy(states).float().to(self.device)
 		actions = torch.from_numpy(actions).long().to(self.device)
@@ -182,11 +183,11 @@ class DQN(Algorithm):
 		next_states = torch.from_numpy(next_states).float().to(self.device)
 		are_terminals = torch.from_numpy(are_terminals).float().to(self.device)
 
-		predictions = self.policy_network(states).gather(dim=1, index=actions.unsqueeze(1))
+		predictions = self.policy(states).gather(dim=1, index=actions.unsqueeze(1))
 
 		with torch.no_grad():
 			target = (
-					rewards + self.gamma * self.target_network(next_states).max(1)[0] * (1 - are_terminals)
+					rewards + self.gamma * self.policy_target(next_states).max(1)[0] * (1 - are_terminals)
 			).unsqueeze(1)
 
 		self.optimizer.zero_grad()

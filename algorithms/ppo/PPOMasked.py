@@ -49,7 +49,7 @@ class PPOMasked(Algorithm):
 			actor_hidden_layers_nb (int): number of hidden linear layers in the actor network
 			actor_hidden_size (int): size of the hidden linear layers in the actor network
 			critic_hidden_layers_nb (int): number of hidden linear layers in the critic network
-			critic_hidden_size (int): size of the hidden linear layers in the actor network
+			critic_hidden_size (int): size of the hidden linear layers in the critic network
 		"""
 		super().__init__(config=config)
 
@@ -150,7 +150,7 @@ class PPOMasked(Algorithm):
 		:param max_steps: maximum number of steps for the whole training process
 		"""
 		self.writer = SummaryWriter(
-			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/PPO-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",

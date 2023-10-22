@@ -42,7 +42,7 @@ class A2C(Algorithm):
 			actor_hidden_layers_nb (int): number of hidden linear layers in the actor network
 			actor_hidden_size (int): size of the hidden linear layers in the actor network
 			critic_hidden_layers_nb (int): number of hidden linear layers in the critic network
-			critic_hidden_size (int): size of the hidden linear layers in the actor network
+			critic_hidden_size (int): size of the hidden linear layers in the critic network
 		"""
 		super().__init__(config=config)
 
@@ -127,7 +127,7 @@ class A2C(Algorithm):
 		# From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
 
 		self.writer = SummaryWriter(
-			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/A2C-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",

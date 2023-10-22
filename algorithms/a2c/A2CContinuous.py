@@ -42,7 +42,7 @@ class A2CContinuous(Algorithm):
 			actor_hidden_layers_nb (int): number of hidden linear layers in the actor network
 			actor_hidden_size (int): size of the hidden linear layers in the actor network
 			critic_hidden_layers_nb (int): number of hidden linear layers in the critic network
-			critic_hidden_size (int): size of the hidden linear layers in the actor network
+			critic_hidden_size (int): size of the hidden linear layers in the critic network
 		"""
 		super().__init__(config=config)
 
@@ -112,7 +112,6 @@ class A2CContinuous(Algorithm):
 		self.action_space_high = torch.from_numpy(self.env_act_space.high).to(self.device)
 		actor_config["actions_nb"] = self.actions_nb = int(np.prod(self.env_act_space.shape))
 		self.actor: nn.Module = ActorContinuous(config=actor_config).to(self.device)
-
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
 		critic_config = {
@@ -129,7 +128,7 @@ class A2CContinuous(Algorithm):
 		# From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
 
 		self.writer = SummaryWriter(
-			f"runs/{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/A2C-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",

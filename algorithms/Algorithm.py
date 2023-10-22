@@ -59,7 +59,6 @@ class Algorithm:
 				np.stack(infos["action_mask"])
 			).float().to(self.device)
 
-
 	@staticmethod
 	def dict2mdtable(d: dict[str: float], key: str = 'Name', val: str = 'Value'):
 		"""

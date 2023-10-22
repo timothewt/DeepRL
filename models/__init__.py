@@ -1,4 +1,4 @@
 from .ActorContinuous import ActorContinuous
-from .ActorCritic import ActorCritic
+from .QCritic import QCritic
 from .FCNet import FCNet
 from .FCNetMasked import FCNetMasked

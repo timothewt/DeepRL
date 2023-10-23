@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from typing import Any
 
@@ -124,13 +125,16 @@ class A2CMasked(Algorithm):
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
 		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
-	def train(self, max_steps: int) -> None:
+	def train(self, max_steps: int, save_models: bool = True) -> None:
 		"""
+		Trains the agent on the environment
 		From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
-		:param max_steps: maximum number of steps for the whole training process
+		:param max_steps: maximum number of steps to train the agent
+		:param save_models: indicates if the models should be saved at the end of the training
 		"""
+		exp_name = f"A2CMasked-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
-			f"runs/A2C-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/{exp_name}",
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",
@@ -206,6 +210,10 @@ class A2CMasked(Algorithm):
 				episode += 1
 
 		print("==== TRAINING COMPLETE ====")
+		if save_models:
+			os.makedirs(f"saved_models/{exp_name}")
+			torch.save(self.actor.state_dict(), f"saved_models/{exp_name}/actor.pt")
+			torch.save(self.critic.state_dict(), f"saved_models/{exp_name}/critic.pt")
 
 	def update_networks(self, buffer: Buffer) -> None:
 		"""
@@ -248,3 +256,18 @@ class A2CMasked(Algorithm):
 			returns[t] = R
 
 		return returns.detach() - values
+
+	def compute_single_action(self, obs: np.ndarray, infos: dict) -> int | np.ndarray:
+		"""
+		Computes one action for the given observation
+		:param obs: observation to compute the action from
+		:param infos: infos given by the environment
+		:return: the action
+		"""
+		if not self.is_multi_agents:
+			obs = obs.reshape(1, -1)
+		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
+		mask = self._extract_action_mask_from_infos(infos)
+		probs = self.actor(obs, mask)
+		dist = Categorical(probs=probs)
+		return dist.sample().item()

@@ -1,5 +1,6 @@
 from typing import Any
 
+import glob
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -18,7 +19,7 @@ class Algorithm:
 		self.action_space_high = tensor([0])
 		self.env_obs_space = spaces.Space()
 
-	def train(self, max_steps: int) -> None:
+	def train(self, max_steps: int, save_model: bool = False) -> None:
 		raise NotImplementedError
 
 	@property
@@ -48,7 +49,7 @@ class Algorithm:
 				spaces.flatten(self.env_obs_space, value) for value in obs
 			])
 
-	def _extract_action_mask_from_infos(self, infos: dict | list) -> tensor:
+	def _extract_action_mask_from_infos(self, infos: dict) -> tensor:
 		if self.is_multi_agents:
 			# Issue: no infos on dead agent => KeyError
 			return torch.from_numpy(np.array(
@@ -73,3 +74,10 @@ class Algorithm:
 		rows += ['|--|--|']
 		rows += [f'| {k} | {v} |' for k, v in d.items()]
 		return "  \n".join(rows)
+
+	def load_models(self, dir_path: str) -> None:
+		for saved_model in glob.glob(f"{dir_path}/*.pt"):
+			self.__getattribute__(saved_model.split("\\")[-1].split(".")[0]).load_state_dict(torch.load(saved_model))
+
+	def compute_single_action(self, obs: np.ndarray, infos: dict) -> int:
+		raise NotImplementedError

@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from typing import Any
 
@@ -144,14 +145,16 @@ class PPOContinuous(Algorithm):
 
 		self.mse = nn.MSELoss()
 
-	def train(self, max_steps: int) -> None:
+	def train(self, max_steps: int, save_models: bool = False) -> None:
 		"""
 		Trains the algorithm on the chosen environment
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 		:param max_steps: maximum number of steps for the whole training process
+		:param save_models: indicates if the models should be saved at the end of the training
 		"""
+		exp_name = f"PPOContinuous_{self.env.metadata.get('name', 'env_')}_{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
-			f"runs/PPO-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/{exp_name}",
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",
@@ -227,6 +230,10 @@ class PPOContinuous(Algorithm):
 				episode += 1
 
 		print("==== TRAINING COMPLETE ====")
+		if save_models:
+			os.mkdir(f"saved_models/{exp_name}")
+			torch.save(self.actor.state_dict(), f"saved_models/{exp_name}/actor.pt")
+			torch.save(self.critic.state_dict(), f"saved_models/{exp_name}/critic.pt")
 
 	def _update_networks(self, buffer: Buffer) -> None:
 		"""
@@ -300,3 +307,18 @@ class PPOContinuous(Algorithm):
 			next_step_terminates = dones[t]
 
 		return advantages
+
+	def compute_single_action(self, obs: np.ndarray, infos: dict) -> int | np.ndarray:
+		"""
+		Computes one action for the given observation
+		:param obs: observation to compute the action from
+		:param infos: infos given by the environment
+		:return: the action
+		"""
+		if not self.is_multi_agents:
+			obs = obs.reshape(1, -1)
+		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
+		means, _ = self.actor(obs)
+		if not self.is_multi_agents:
+			return self._scale_to_action_space(means).detach().cpu().numpy()[0]
+		return self._scale_to_action_space(means).detach().cpu().numpy()

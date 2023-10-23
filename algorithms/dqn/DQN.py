@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 import gymnasium as gym
@@ -91,13 +92,15 @@ class DQN(Algorithm):
 		self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=self.lr)
 		self.loss_fn: nn.MSELoss = nn.MSELoss()
 
-	def train(self, max_steps: int) -> None:
+	def train(self, max_steps: int, save_models: bool = False) -> None:
 		"""
 		Trains the algorithm on the chosen environment
 		:param max_steps: maximum number of steps for the whole training process
+		:param save_models: indicates if the models should be saved at the end of the training
 		"""
+		exp_name = f"DQN-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
-			f"runs/DQN-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/{exp_name}"
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",
@@ -168,6 +171,9 @@ class DQN(Algorithm):
 			episode += 1
 
 		print("==== TRAINING COMPLETE ====")
+		if save_models:
+			os.mkdir(f"saved_models/{exp_name}")
+			torch.save(self.policy.state_dict(), f"saved_models/{exp_name}/policy.pt")
 
 	def _update_networks(self, replay_memory: ReplayMemory, step: int) -> None:
 		"""
@@ -199,3 +205,15 @@ class DQN(Algorithm):
 
 		self.writer.add_scalar("Stats/Loss", loss, step)
 		self.writer.add_scalar("Stats/Epsilon", self.eps, step)
+
+	def compute_single_action(self, obs: np.ndarray, infos: dict) -> int:
+		"""
+		Computes one action for the given observation
+		:param obs: observation to compute the action from
+		:param infos: additional information
+		:return: action to take
+		"""
+		with torch.no_grad():
+			return torch.argmax(
+				self.policy(tensor(self._flatten_obs(obs), device=self.device))
+			).item()

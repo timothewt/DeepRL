@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any
 
+import os
 import gymnasium as gym
 import numpy as np
 import supersuit as ss
@@ -126,7 +127,6 @@ class PPO(Algorithm):
 		}
 
 		self.actor: nn.Module = FCNet(config=actor_config).to(self.device)
-
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
 		critic_config = {
@@ -141,14 +141,16 @@ class PPO(Algorithm):
 
 		self.mse = nn.MSELoss()
 
-	def train(self, max_steps: int) -> None:
+	def train(self, max_steps: int, save_models: bool = False) -> None:
 		"""
 		Trains the algorithm on the chosen environment
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 		:param max_steps: maximum number of steps for the whole training process
+		:param save_models: indicates if the models should be saved at the end of the training
 		"""
+		exp_name = f"PPO-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
-			f"runs/PPO-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+			f"runs/{exp_name}",
 		)
 		self.writer.add_text(
 			"Hyperparameters/hyperparameters",
@@ -225,6 +227,10 @@ class PPO(Algorithm):
 				episode += 1
 
 		print("==== TRAINING COMPLETE ====")
+		if save_models:
+			os.mkdir(f"saved_models/{exp_name}")
+			torch.save(self.actor.state_dict(), f"saved_models/{exp_name}/actor.pt")
+			torch.save(self.critic.state_dict(), f"saved_models/{exp_name}/critic.pt")
 
 	def _update_networks(self, buffer: Buffer) -> None:
 		"""
@@ -293,20 +299,23 @@ class PPO(Algorithm):
 
 		advantages = torch.zeros(deltas.shape, device=self.device)
 		last_advantage = advantages[-1]
-		next_step_terminates = dones[-1]  # should be the dones of the next step however cannot reach it
+		next_step_terminates = 0  # should be the dones of the next step after last step of the batch however cannot reach it
 		for t in reversed(range(buffer.max_len)):
 			advantages[t] = last_advantage = deltas[t] + gamma * gae_lambda * last_advantage * (1 - next_step_terminates)
 			next_step_terminates = dones[t]
 
 		return advantages
 
-	def _extract_action_mask_from_infos(self, infos: dict | list) -> tensor:
-		if self.is_multi_agents:
-			# Issue: no infos on dead agent => KeyError
-			return torch.from_numpy(np.array(
-				[agent_info["action_mask"] for agent_info in infos]
-			)).float().to(self.device)
-		else:
-			return torch.from_numpy(
-				np.stack(infos["action_mask"])
-			).float().to(self.device)
+	def compute_single_action(self, obs: np.ndarray, infos: dict) -> int | np.ndarray:
+		"""
+		Computes one action for the given observation
+		:param obs: observation to compute the action from
+		:param infos: infos given by the environment
+		:return: the action
+		"""
+		if not self.is_multi_agents:
+			obs = obs.reshape(1, -1)
+		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
+		probs = self.actor(obs)
+		dist = Categorical(probs=probs)
+		return dist.sample().item()

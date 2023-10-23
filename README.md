@@ -15,8 +15,8 @@ API, or multi-agents using the PettingZoo Parallel API. Most algorithms also sup
 
 ### Technologies used
 
-* Python>=3.10
-* PyTorch
+* Python 3.11
+* PyTorch 2.1.0
 * Install all the requirements using `pip install -r requirements.txt`
 
 ### Usage

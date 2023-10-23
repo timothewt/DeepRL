@@ -6,15 +6,16 @@ from torch import cuda, device
 from algorithms.dqn import DQN
 from algorithms.ppo import PPO, PPOContinuous, PPOMasked
 from algorithms.a2c import A2C, A2CContinuous, A2CMasked
-
+from envs.airport import AirportEnv
 
 if __name__ == "__main__":
 
-	algo = PPOContinuous(config={
+	algo = PPOMasked(config={
 		# "env_fn": lambda: gym.make("CartPole-v1"),
-		"env_fn": lambda: gym.make("Pendulum-v1"),
+		# "env_fn": lambda: gym.make("Pendulum-v1"),
 		# "env_fn": lambda: MinesweeperEnv(grid_width=4, grid_height=4),
 		# "env_fn": lambda: SnakeEnv(),
+		"env_fn": lambda: AirportEnv(agents_nb=5),
 		"num_envs": 8,
 		# "device": device("cuda:0" if cuda.is_available() else "cpu"),
 		"actor_hidden_layers_nb": 3,
@@ -32,9 +33,9 @@ if __name__ == "__main__":
 
 	# algo.train(30_000, True)
 	#
-	algo.load_models(r"C:\Users\AT82790\Documents\DeepRL\saved_models\PPOContinuous_env__23-10-23_13h29m06")
+	algo.load_models(r"C:\Users\AT82790\Documents\DeepRL\saved_models\PPOMaskedAirportEnv_v0_23-10-23_13h12m17")
 
-	env = gym.make("Pendulum-v1", render_mode="human")
+	env = ss.pettingzoo_env_to_vec_env_v1(AirportEnv(agents_nb=5, render_mode="human"))
 	obs, infos = env.reset()
 
 	while True:

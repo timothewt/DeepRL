@@ -121,8 +121,10 @@ class PPO(Algorithm):
 
 		actor_config = {
 			"input_size": np.prod(self.env_flat_obs_space.shape),
-			"hidden_layers_nb": self.actor_hidden_layers_nb, "hidden_size": self.actor_hidden_size,
-			"output_layer_std": .01, "output_size": self.env_act_space.n,
+			"hidden_layers_nb": self.actor_hidden_layers_nb,
+			"hidden_size": self.actor_hidden_size,
+			"output_layer_std": .01,
+			"output_size": self.env_act_space.n,
 			"output_function": nn.Softmax(dim=-1)
 		}
 
@@ -141,12 +143,13 @@ class PPO(Algorithm):
 
 		self.mse = nn.MSELoss()
 
-	def train(self, max_steps: int, save_models: bool = False) -> None:
+	def train(self, max_steps: int, save_models: bool = False, save_freq: int = 1_000) -> None:
 		"""
 		Trains the algorithm on the chosen environment
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 		:param max_steps: maximum number of steps for the whole training process
 		:param save_models: indicates if the models should be saved at the end of the training
+		:param save_freq: frequency at which the models should be saved
 		"""
 		exp_name = f"PPO-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
@@ -190,7 +193,7 @@ class PPO(Algorithm):
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
-		for _ in tqdm(range(max_steps), desc="PPO Training"):
+		for step in tqdm(range(max_steps), desc="PPO Training"):
 			critic_output = self.critic(obs)  # value function
 
 			probs = self.actor(obs)
@@ -226,11 +229,12 @@ class PPO(Algorithm):
 				first_agent_rewards = 0
 				episode += 1
 
+			if save_models and step % save_freq == 0:
+				self.save_models(f"{exp_name}/step{step}", [("actor", self.actor), ("critic", self.critic)])
+
 		print("==== TRAINING COMPLETE ====")
 		if save_models:
-			os.mkdir(f"saved_models/{exp_name}")
-			torch.save(self.actor.state_dict(), f"saved_models/{exp_name}/actor.pt")
-			torch.save(self.critic.state_dict(), f"saved_models/{exp_name}/critic.pt")
+			self.save_models(exp_name, [("actor", self.actor), ("critic", self.critic)])
 
 	def _update_networks(self, buffer: Buffer) -> None:
 		"""
@@ -318,4 +322,4 @@ class PPO(Algorithm):
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		probs = self.actor(obs)
 		dist = Categorical(probs=probs)
-		return dist.sample().item()
+		return dist.sample().detach().cpu().numpy()

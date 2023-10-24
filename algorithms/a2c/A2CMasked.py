@@ -125,12 +125,13 @@ class A2CMasked(Algorithm):
 		self.critic: nn.Module = FCNet(config=critic_config).to(self.device)
 		self.critic_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
-	def train(self, max_steps: int, save_models: bool = True) -> None:
+	def train(self, max_steps: int, save_models: bool = True, save_freq: int = 1_000) -> None:
 		"""
 		Trains the agent on the environment
 		From Algorithm S3 : https://arxiv.org/pdf/1602.01783v2.pdf
 		:param max_steps: maximum number of steps to train the agent
 		:param save_models: indicates if the models should be saved at the end of the training
+		:param save_freq: frequency at which the models should be saved
 		"""
 		exp_name = f"A2CMasked-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
@@ -169,7 +170,7 @@ class A2CMasked(Algorithm):
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
-		for _ in tqdm(range(max_steps), desc="A2C Training"):
+		for step in tqdm(range(max_steps), desc="A2C Training"):
 			critic_output = self.critic(obs)  # value function
 
 			probs = self.actor(obs, masks)
@@ -209,11 +210,12 @@ class A2CMasked(Algorithm):
 				first_agent_rewards = 0
 				episode += 1
 
+			if save_models and step % save_freq == 0:
+				self.save_models(f"{exp_name}/step{step}", [("actor", self.actor), ("critic", self.critic)])
+
 		print("==== TRAINING COMPLETE ====")
 		if save_models:
-			os.makedirs(f"saved_models/{exp_name}")
-			torch.save(self.actor.state_dict(), f"saved_models/{exp_name}/actor.pt")
-			torch.save(self.critic.state_dict(), f"saved_models/{exp_name}/critic.pt")
+			self.save_models(exp_name, [("actor", self.actor), ("critic", self.critic)])
 
 	def update_networks(self, buffer: Buffer) -> None:
 		"""
@@ -270,4 +272,4 @@ class A2CMasked(Algorithm):
 		mask = self._extract_action_mask_from_infos(infos)
 		probs = self.actor(obs, mask)
 		dist = Categorical(probs=probs)
-		return dist.sample().item()
+		return dist.sample().detach().cpu().numpy()

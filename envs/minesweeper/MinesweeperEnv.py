@@ -38,6 +38,8 @@ class MinesweeperEnv(gym.Env):
 					self.bombs.add(new_bomb)
 					break
 
+		self.render()
+
 		return self._get_obs(), {"action_mask": self._get_action_mask()}
 
 	def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
@@ -54,6 +56,9 @@ class MinesweeperEnv(gym.Env):
 			terminated = (self.grid < 0).sum() == self.bombs_nb
 
 		reward = self._get_reward(terminated, truncated)
+
+		self.render()
+
 		return self._get_obs(), reward, terminated, truncated, {"action_mask": self._get_action_mask()}
 
 	def render(self) -> None | str:

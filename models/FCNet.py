@@ -2,7 +2,6 @@ from typing import Any
 
 from numpy import sqrt
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.nn.init
 
 
@@ -24,7 +23,7 @@ class FCNet(nn.Module):
 		output_size: int = config.get("output_size", 1)
 		hidden_layers_nb: int = config.get("hidden_layers_nb", 2)
 		hidden_size: int = config.get("hidden_size", 32)
-		activation_function = config.get("activation_function", F.relu)
+		activation_function = config.get("activation_function", nn.ReLU())
 		output_function = config.get("output_function", None)
 
 		self.fc = nn.ModuleList(

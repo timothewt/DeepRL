@@ -1,7 +1,7 @@
-import os
 from datetime import datetime
 from typing import Any
 
+import os
 import gymnasium as gym
 import numpy as np
 import supersuit as ss
@@ -16,15 +16,13 @@ from tqdm import tqdm
 
 from algorithms.Algorithm import Algorithm
 from algorithms.ppo.Buffer import Buffer
-from models import FCNet
-from models import FCNetMasked
+from models import FCNet, FCNetMultiHead
 
 
-class PPOMasked(Algorithm):
+class PPOMultiDiscrete(Algorithm):
 	"""
 	Proximal Policy Optimization
-	Used for discrete action spaces with an action mask. The action mask has to be in the
-	infos dict, with the "action_mask" key.
+	Used for multi-discrete action spaces without action mask.
 	Environment can either be a gymnasium.Env or a pettingzoo.ParallelEnv.
 	"""
 	def __init__(self, config: dict[str: Any]):
@@ -63,7 +61,6 @@ class PPOMasked(Algorithm):
 		self.env_fn = config.get("env_fn", None)
 		assert self.env_fn is not None, "No environment function provided!"
 		self.env: gym.Env | ParallelEnv = self.env_fn()
-
 		assert isinstance(self.env, gym.Env) or isinstance(self.env, ParallelEnv), \
 			"Only gymnasium.Env and pettingzoo.ParallelEnv are currently supported."
 		self.is_multi_agents = isinstance(self.env, ParallelEnv)
@@ -80,6 +77,8 @@ class PPOMasked(Algorithm):
 		else:
 			self.envs: AsyncVectorEnv = AsyncVectorEnv([self.env_fn for _ in range(self.num_envs)])
 			self.env_act_space = self.envs.single_action_space
+		assert isinstance(self.env_act_space, spaces.MultiDiscrete), \
+			"Only multi-discrete action spaces are supported. For [space_type] spaces, see PPO[space_type]"
 
 		# Stats
 
@@ -107,14 +106,12 @@ class PPOMasked(Algorithm):
 
 		# Policies
 
-		assert isinstance(self.env_act_space, spaces.Discrete), "Action mask only supported in Discrete action spaces!"
-		self.action_mask_size = self.env_act_space.n
 		if self.is_multi_agents:
 			self.env_obs_space = self.envs.observation_space
 		else:
 			self.env_obs_space = self.envs.single_observation_space
 		self.env_flat_obs_space = gym.spaces.utils.flatten_space(self.env_obs_space)
-		self.actions_nb = 1
+		self.actions_nb = np.prod(self.env_act_space.shape)
 
 		self.actor_hidden_layers_nb = config.get("actor_hidden_layers_nb", 3)
 		self.actor_hidden_size = config.get("actor_hidden_size", 64)
@@ -126,11 +123,11 @@ class PPOMasked(Algorithm):
 			"hidden_layers_nb": self.actor_hidden_layers_nb,
 			"hidden_size": self.actor_hidden_size,
 			"output_layer_std": .01,
-			"output_size": self.env_act_space.n,
+			"heads_nb": self.actions_nb,
+			"output_sizes": self.env_act_space.nvec,
 			"output_function": nn.Softmax(dim=-1)
 		}
-
-		self.actor: nn.Module = FCNetMasked(config=actor_config).to(self.device)
+		self.actor: nn.Module = FCNetMultiHead(config=actor_config).to(self.device)
 		self.actor_optimizer: torch.optim.Optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
 		critic_config = {
@@ -153,7 +150,7 @@ class PPOMasked(Algorithm):
 		:param save_models: indicates if the models should be saved at the end of the training
 		:param save_freq: frequency at which the models should be saved
 		"""
-		exp_name = f"PPOMasked{self.env.metadata.get('name', 'env_')}_{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
+		exp_name = f"PPO-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
 			f"runs/{exp_name}",
 		)
@@ -187,43 +184,45 @@ class PPOMasked(Algorithm):
 
 		episode = 0
 
-		buffer = Buffer(self.num_envs * self.num_agents, self.horizon, self.env_flat_obs_space.shape, self.actions_nb, self.device, self.action_mask_size)
+		buffer = Buffer(self.num_envs * self.num_agents, self.horizon, self.env_flat_obs_space.shape, self.actions_nb, self.device)
 
 		print("==== STARTING TRAINING ====")
 
 		obs, infos = self.envs.reset()
-		masks = self._extract_action_mask_from_infos(infos)
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
 		first_agent_rewards = 0
 
 		for step in tqdm(range(max_steps), desc="PPO Training"):
 			critic_output = self.critic(obs)  # value function
 
-			probs = self.actor(obs, masks)
-			dist = Categorical(probs=probs)
-			actions = dist.sample()
-			actions_to_input = actions.cpu().numpy()
-			log_probs = dist.log_prob(actions).unsqueeze(1)
-			actions = actions.unsqueeze(1)
+			probs = self.actor(obs)
+			dists = [
+				Categorical(probs=probs[i]) for i in range(self.actions_nb)
+			]
+			actions = torch.stack([
+				dist.sample() for dist in dists
+			]).to(self.device)
+			actions_to_input = actions.T.cpu().numpy()
+
+			log_probs = torch.stack([
+				dists[i].log_prob(actions[i]) for i in range(self.actions_nb)
+			]).T
 
 			new_obs, rewards, dones, truncateds, new_infos = self.envs.step(actions_to_input)
 			dones = dones + truncateds  # done or truncate
-			new_masks = self._extract_action_mask_from_infos(new_infos)
 			new_obs = torch.from_numpy(self._flatten_obs(new_obs)).float().to(self.device)
 
 			buffer.push(
 				obs,
 				new_obs,
 				torch.from_numpy(dones).float().to(self.device).unsqueeze(1),
-				actions,
+				actions.T,  # needs to be transposed to be of shape (num_envs, actions_nb) instead of (actions_nb, num_envs)
 				torch.from_numpy(rewards).float().to(self.device).unsqueeze(1),
 				critic_output,
 				log_probs,
-				masks,
 			)
 
 			obs = new_obs
-			masks = new_masks
 
 			if buffer.is_full():
 				self._update_networks(buffer)
@@ -247,9 +246,8 @@ class PPOMasked(Algorithm):
 		Updates the actor and critic networks according to the PPO paper
 		:param buffer: complete buffer of experiences
 		"""
-		states, _, _, actions, rewards, values, old_log_probs, action_masks = buffer.get_all_flattened()
+		states, _, _, actions, rewards, values, old_log_probs, _ = buffer.get_all_flattened()
 		values, old_log_probs = values.detach().view(self.batch_size, 1), old_log_probs.detach()
-		actions = actions.view(self.batch_size)
 
 		advantages = self._compute_advantages(buffer, self.gamma, self.gae_lambda).flatten(end_dim=1)
 		advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -263,11 +261,16 @@ class PPOMasked(Algorithm):
 				end = start + self.minibatch_size
 				minibatch_indices = indices[start:end]
 
-				probs = self.actor(states[minibatch_indices], action_masks[minibatch_indices])
-				new_dist = Categorical(probs=probs)
-
-				new_log_probs = new_dist.log_prob(actions[minibatch_indices]).view(self.minibatch_size, self.actions_nb)
-				new_entropy = new_dist.entropy()
+				probs = self.actor(states[minibatch_indices])
+				new_dists = [
+					Categorical(probs=probs[i]) for i in range(self.actions_nb)
+				]
+				new_log_probs = torch.stack([
+					new_dists[i].log_prob(actions[minibatch_indices].T[i]) for i in range(self.actions_nb)
+				]).T.view(self.minibatch_size, self.actions_nb)
+				new_entropy = torch.stack([
+					new_dist.entropy() for new_dist in new_dists
+				])
 				new_values = self.critic(states[minibatch_indices])
 
 				r = torch.exp(new_log_probs - old_log_probs[minibatch_indices])  # policy ratio
@@ -309,7 +312,7 @@ class PPOMasked(Algorithm):
 
 		advantages = torch.zeros(deltas.shape, device=self.device)
 		last_advantage = advantages[-1]
-		next_step_terminates = dones[-1]  # should be the dones of the next step however cannot reach it
+		next_step_terminates = 0  # should be the dones of the next step after last step of the batch however cannot reach it
 		for t in reversed(range(buffer.max_len)):
 			advantages[t] = last_advantage = deltas[t] + gamma * gae_lambda * last_advantage * (1 - next_step_terminates)
 			next_step_terminates = dones[t]
@@ -326,7 +329,11 @@ class PPOMasked(Algorithm):
 		if not self.is_multi_agents:
 			obs = obs.reshape(1, -1)
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
-		mask = self._extract_action_mask_from_infos(infos)
-		probs = self.actor(obs, mask)
-		dist = Categorical(probs=probs)
-		return dist.sample().detach().cpu().numpy()
+		probs = self.actor(obs)
+		dists = [
+			Categorical(probs=probs[i]) for i in range(self.actions_nb)
+		]
+		actions = torch.stack([
+			dist.sample() for dist in dists
+		]).view(self.actions_nb)
+		return actions.detach().numpy()

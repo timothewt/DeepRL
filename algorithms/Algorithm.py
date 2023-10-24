@@ -1,10 +1,11 @@
+import os
 from typing import Any
 
 import glob
 import numpy as np
 import torch
 from gymnasium import spaces
-from torch import tensor
+from torch import tensor, nn
 
 
 class Algorithm:
@@ -19,7 +20,7 @@ class Algorithm:
 		self.action_space_high = tensor([0])
 		self.env_obs_space = spaces.Space()
 
-	def train(self, max_steps: int, save_model: bool = False) -> None:
+	def train(self, max_steps: int, save_model: bool = False, save_freq: int = 1_000) -> None:
 		raise NotImplementedError
 
 	@property
@@ -43,7 +44,9 @@ class Algorithm:
 		:return: the observation in one dimension
 		"""
 		if self.num_envs == 1:
-			return spaces.flatten(self.env_obs_space, obs)
+			return np.array([
+				spaces.flatten(self.env_obs_space, obs)
+			])
 		else:
 			return np.array([
 				spaces.flatten(self.env_obs_space, value) for value in obs
@@ -75,7 +78,22 @@ class Algorithm:
 		rows += [f'| {k} | {v} |' for k, v in d.items()]
 		return "  \n".join(rows)
 
+	@staticmethod
+	def save_models(exp_name: str, models: list[tuple[str, nn.Module]]) -> None:
+		"""
+		Saves the models in the given directory
+		:param models: list of tuples of the algorithm's models (name, model)
+		:param exp_name: name of the experiment
+		"""
+		os.makedirs(f"saved_models/{exp_name}", exist_ok=True)
+		for name, model in models:
+			torch.save(model.state_dict(), f"saved_models/{exp_name}/{name}.pt")
+
 	def load_models(self, dir_path: str) -> None:
+		"""
+		Loads the models from the given directory
+		:param dir_path: directory path
+		"""
 		for saved_model in glob.glob(f"{dir_path}/*.pt"):
 			self.__getattribute__(saved_model.split("\\")[-1].split(".")[0]).load_state_dict(torch.load(saved_model))
 

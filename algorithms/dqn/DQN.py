@@ -92,11 +92,12 @@ class DQN(Algorithm):
 		self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=self.lr)
 		self.loss_fn: nn.MSELoss = nn.MSELoss()
 
-	def train(self, max_steps: int, save_models: bool = False) -> None:
+	def train(self, max_steps: int, save_models: bool = False, save_freq: int = 1_000) -> None:
 		"""
 		Trains the algorithm on the chosen environment
 		:param max_steps: maximum number of steps for the whole training process
 		:param save_models: indicates if the models should be saved at the end of the training
+		:param save_freq: frequency at which the models should be saved
 		"""
 		exp_name = f"DQN-{self.env.metadata.get('name', 'env_')}-{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"
 		self.writer = SummaryWriter(
@@ -167,13 +168,15 @@ class DQN(Algorithm):
 
 				steps_before_target_network_update -= 1
 
+				if save_models and step % save_freq == 0:
+					self.save_models(f"{exp_name}/step{step}", [("policy", self.policy)])
+
 			self.writer.add_scalar("Stats/Rewards", episode_rewards, episode)
 			episode += 1
 
 		print("==== TRAINING COMPLETE ====")
 		if save_models:
-			os.mkdir(f"saved_models/{exp_name}")
-			torch.save(self.policy.state_dict(), f"saved_models/{exp_name}/policy.pt")
+			self.save_models(exp_name, [("policy", self.policy)])
 
 	def _update_networks(self, replay_memory: ReplayMemory, step: int) -> None:
 		"""
@@ -216,4 +219,4 @@ class DQN(Algorithm):
 		with torch.no_grad():
 			return torch.argmax(
 				self.policy(tensor(self._flatten_obs(obs), device=self.device))
-			).item()
+			).detach().cpu().numpy()

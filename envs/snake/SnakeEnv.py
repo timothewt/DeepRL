@@ -34,6 +34,8 @@ class SnakeEnv(gym.Env):
 		self.snake = [(randint(0, self.width - 1), randint(0, self.height - 1))]
 		self._place_food()
 
+		self.render()
+
 		return self._get_obs(), {"action_mask": self._get_action_mask()}
 
 	def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
@@ -64,6 +66,8 @@ class SnakeEnv(gym.Env):
 		obs = self._get_obs()
 		reward = self._get_reward(truncated, ate_food, got_closer_to_food)
 		terminated = len(self.snake) == self.grid_dimension
+
+		self.render()
 
 		return obs, reward, terminated, truncated, {"action_mask": self._get_action_mask()}
 

@@ -2,4 +2,7 @@
 # TODO: add a CNN model
 # TODO: multi agents DQN
 # TODO: add mask with multi-discrete action space
-# TODO: add multi agents with multi-discrete action space (with action masking)
+
+# Env idea : tron-like game where agents need to reach a target while avoiding other agents' bike trails
+#            agents can choose to steer far left, left, go straight, right or far right
+

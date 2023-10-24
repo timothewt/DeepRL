@@ -145,12 +145,13 @@ class PPOMasked(Algorithm):
 
 		self.mse = nn.MSELoss()
 
-	def train(self, max_steps: int, save_models: bool = False, save_freq: int = 1_000) -> None:
+	def train(self, max_steps: int, save_models: bool = False, checkpoints: bool = False, save_freq: int = 1_000) -> None:
 		"""
 		Trains the algorithm on the chosen environment
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
 		:param max_steps: maximum number of steps for the whole training process
 		:param save_models: indicates if the models should be saved at the end of the training
+		:param checkpoints: indicates if the models should be saved at regular intervals
 		:param save_freq: frequency at which the models should be saved
 		"""
 		exp_name = f"PPOMasked{self.env.metadata.get('name', 'env_')}_{datetime.now().strftime('%d-%m-%y_%Hh%Mm%S')}"

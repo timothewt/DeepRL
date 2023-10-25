@@ -1,13 +1,15 @@
 from random import randint
+from time import time
 from typing import Any
 
+import pygame as pg
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
 
 class SnakeEnv(gym.Env):
-	metadata = {"render_modes": ["ansi"], "render_fps": 1, "name": "SnakeEnv-v0"}
+	metadata = {"render_modes": ["ansi", "human"], "render_fps": 15, "name": "SnakeEnv-v0"}
 
 	def __init__(self, width: int = 12, height: int = 12, render_mode: str | None = None):
 		super().__init__()
@@ -28,11 +30,19 @@ class SnakeEnv(gym.Env):
 		})
 		self.observation_space = spaces.flatten_space(self.real_obs_space)
 
+		assert self.render_mode in self.metadata["render_modes"] or self.render_mode is None
 		self.render_mode: str | None = render_mode
+		if self.render_mode == "human":
+			pg.init()
+			self.pg_clock = pg.time.Clock()
+			self.cell_size = 40
+			self.screen = pg.display.set_mode((self.width * self.cell_size, self.height * self.cell_size))
+			self.last_render_update = time()
 
 	def reset(self, seed=None, options=None) -> tuple[np.ndarray, dict[str, Any]]:
 		self.snake = [(randint(0, self.width - 1), randint(0, self.height - 1))]
 		self._place_food()
+		self.score = 0
 
 		self.render()
 
@@ -58,6 +68,7 @@ class SnakeEnv(gym.Env):
 		ate_food = new_head == self.food
 		got_closer_to_food = prev_distance_to_food > distance_to_food
 		if ate_food:
+			self.score += 1
 			self._place_food()
 		else:
 			self.snake.pop()
@@ -86,6 +97,20 @@ class SnakeEnv(gym.Env):
 						str_grid += "⬝  "
 				str_grid += "\n"
 			return str_grid
+		elif self.render_mode == "human":
+			while time() - self.last_render_update < (1 / self.metadata["render_fps"]):
+				pass
+			self.last_render_update = time()
+			self.pg_clock.tick()
+
+			self.screen.fill((20, 20, 80))
+			pg.draw.rect(self.screen, (255, 0, 0), (self.food[0] * self.cell_size, self.food[1] * self.cell_size, self.cell_size, self.cell_size))
+			pg.draw.rect(self.screen, (0, 200, 0), (self.snake[0][0] * self.cell_size, self.snake[0][1] * self.cell_size, self.cell_size, self.cell_size))
+			for x, y in self.snake[1:]:
+				pg.draw.rect(self.screen, (0, 255, 0), (x * self.cell_size, y * self.cell_size, self.cell_size, self.cell_size))
+			pg.display.set_caption(f"SnakeEnv-v0 | Score: {self.score}")
+			self.screen.blit(pg.font.SysFont("gothambold", 30).render(f"Score: {self.score}", True, (255, 255, 255)), (5, 5))
+			pg.display.flip()
 
 	def close(self):
 		pass

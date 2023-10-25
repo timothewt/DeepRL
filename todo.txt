@@ -6,3 +6,6 @@
 # Env idea : tron-like game where agents need to reach a target while avoiding other agents' bike trails
 #            agents can choose to steer far left, left, go straight, right or far right
 
+# TODO : action masks sizes are a problem in multi discrete!!!!
+# TODO : alternating policy; policy id stored in agent info; list of possible policies in the env init, ppo dict of policies in the algo init?
+

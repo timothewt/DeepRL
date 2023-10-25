@@ -27,7 +27,7 @@ class FCNetMasked(nn.Module):
 		config["output_function"] = None
 		self.fc = FCNet(config=config)
 
-	def forward(self, x, mask: tensor):
+	def forward(self, x: tensor, mask: tensor) -> tensor:
 		return self.output_function(
 			self.fc(x) + torch.clamp(torch.log(mask), min=-3.4e38)
 		)

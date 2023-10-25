@@ -17,8 +17,11 @@ class GridWorldEnv(gym.Env):
 		self.width: int = width
 		self.height: int = height
 
+		self.max_steps = 2 * width * height
+
 		self.agent_x: int = 0
 		self.agent_y: int = 0
+		self.agent_steps: int = 0
 
 		self.target_x: int = 0
 		self.target_y: int = 0
@@ -34,6 +37,7 @@ class GridWorldEnv(gym.Env):
 		self.render_mode: str | None = render_mode
 		if self.render_mode == "human":
 			pg.init()
+			self.pg_clock = pg.time.Clock()
 			self.cell_size = 24
 			self.screen = pg.display.set_mode((self.width * self.cell_size, self.height * self.cell_size))
 			self.last_render_update = time()
@@ -53,7 +57,7 @@ class GridWorldEnv(gym.Env):
 		dist_to_target = self._get_dist_to_target()
 
 		terminated = self.agent_x == self.target_x and self.agent_y == self.target_y
-		truncated = self.agent_x < 0 or self.agent_x >= self.width or self.agent_y < 0 or self.agent_y >= self.height
+		truncated = self.agent_x < 0 or self.agent_x >= self.width or self.agent_y < 0 or self.agent_y >= self.height or self.agent_steps >= self.max_steps
 		reward = self._get_reward(dist_to_target < prev_dist_to_target, terminated, truncated)
 
 		self.render()
@@ -80,6 +84,7 @@ class GridWorldEnv(gym.Env):
 			while time() - self.last_render_update < (1 / self.metadata["render_fps"]):
 				pass
 			self.last_render_update = time()
+			self.pg_clock.tick()
 
 			self.screen.fill((20, 20, 100))
 			pg.draw.rect(self.screen, (255, 0, 0), (self.target_x * self.cell_size, self.target_y * self.cell_size, self.cell_size, self.cell_size))
@@ -99,9 +104,21 @@ class GridWorldEnv(gym.Env):
 		}
 		return spaces.flatten(self.real_obs_space, obs)
 
-	@staticmethod
-	def _get_infos():
-		return {}
+	def _get_infos(self):
+		return {"action_mask": self._get_action_mask()}
+
+	def _get_action_mask(self) -> tuple[np.ndarray, np.ndarray]:
+		vertical_mask = np.ones(3, dtype=np.float32)
+		horizontal_mask = np.ones(3, dtype=np.float32)
+		if self.agent_x == 0:
+			horizontal_mask[0] = 0
+		elif self.agent_x == self.width - 1:
+			horizontal_mask[2] = 0
+		if self.agent_y == 0:
+			vertical_mask[0] = 0
+		elif self.agent_y == self.height - 1:
+			vertical_mask[2] = 0
+		return vertical_mask, horizontal_mask
 
 	@staticmethod
 	def _get_reward(got_closer: bool, terminated: bool, truncated: bool) -> float:
@@ -110,6 +127,6 @@ class GridWorldEnv(gym.Env):
 		elif terminated:
 			return 10
 		elif got_closer:
-			return .5
+			return .1
 		else:
 			return -1

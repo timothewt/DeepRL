@@ -14,7 +14,7 @@ class Buffer:
 			state_shape: tuple[int] = (1,),
 			actions_nb: int = 1,
 			device: torch.device = torch.device("cpu"),
-			action_mask_size: int = 1
+			action_mask_sizes: tuple = ()
 	):
 		"""
 		Initialization of the buffer
@@ -23,7 +23,7 @@ class Buffer:
 		:param state_shape: shape of the state given to the policy
 		:param actions_nb: number of possible actions (1 for discrete and n for continuous)
 		:param device: device used by PyTorch
-		:param action_mask_size: size of the action mask, corresponding to the size of the Discrete action space
+		:param action_mask_sizes: sizes of the action masks, corresponding to the size of each Discrete action space
 		"""
 		self.states = torch.empty((max_len, num_envs, np.prod(state_shape)), device=device)
 		self.next_states = torch.empty((max_len, num_envs, np.prod(state_shape)), device=device)
@@ -32,7 +32,9 @@ class Buffer:
 		self.rewards = torch.empty((max_len, num_envs, 1), device=device)
 		self.values = torch.empty((max_len, num_envs, 1), device=device)
 		self.log_probs = torch.empty((max_len, num_envs, actions_nb), device=device)
-		self.action_masks = torch.empty((max_len, num_envs, action_mask_size), device=device)
+		self.action_masks = [
+			torch.empty((max_len, num_envs, size), device=device) for size in action_mask_sizes
+		]
 
 		self.num_envs = num_envs
 		self.state_shape = state_shape
@@ -56,7 +58,7 @@ class Buffer:
 			rewards: tensor,
 			values: tensor,
 			log_probs: tensor,
-			action_mask: tensor = None,
+			action_masks: tuple[tensor] = None,
 	) -> None:
 		"""
 		Pushes new values in the buffer of shape (num_env, data_shape)
@@ -67,7 +69,7 @@ class Buffer:
 		:param rewards: rewards given for this action
 		:param values: critic policy value
 		:param log_probs: log probability of the actions
-		:param action_mask: action mask used in some environments
+		:param action_masks: action mask used in some environments
 		"""
 		assert self.i < self.max_len, "Buffer is full!"
 
@@ -78,8 +80,9 @@ class Buffer:
 		self.rewards[self.i] = rewards
 		self.values[self.i] = values
 		self.log_probs[self.i] = log_probs
-		if action_mask is not None:
-			self.action_masks[self.i] = action_mask
+		if action_masks is not None:
+			for action_num, mask in enumerate(action_masks):
+				self.action_masks[action_num][self.i] = mask
 
 		self.i += 1
 
@@ -102,7 +105,7 @@ class Buffer:
 			self.rewards.flatten(), \
 			self.values.flatten(), \
 			self.log_probs.flatten(end_dim=1), \
-			self.action_masks.flatten(end_dim=1)
+			[mask.flatten(end_dim=1) for mask in self.action_masks]
 
 	def reset(self) -> None:
 		"""

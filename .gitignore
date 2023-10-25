@@ -6,3 +6,4 @@ envs/airport
 render/
 algorithms/ddpg/
 saved_models/
+algorithms/ppo/PPOMaskedAlternatingPolicy.py

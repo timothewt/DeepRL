@@ -9,7 +9,7 @@ from gymnasium import spaces
 
 
 class GridWorldEnv(gym.Env):
-	metadata = {"render_modes": ["ansi", "human"], "render_fps": 5, "name": "GridWorldEnv-v0"}
+	metadata = {"render_modes": ["ansi", "human"], "render_fps": 10, "name": "GridWorldEnv-v0"}
 
 	def __init__(self, width: int = 12, height: int = 12, render_mode: str | None = None):
 		super().__init__()
@@ -17,7 +17,7 @@ class GridWorldEnv(gym.Env):
 		self.width: int = width
 		self.height: int = height
 
-		self.max_steps = 2 * width * height
+		self.max_steps: int = width * height // 2
 
 		self.agent_x: int = 0
 		self.agent_y: int = 0
@@ -125,7 +125,7 @@ class GridWorldEnv(gym.Env):
 		if truncated:
 			return -100
 		elif terminated:
-			return 10
+			return 20
 		elif got_closer:
 			return .1
 		else:

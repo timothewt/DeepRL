@@ -143,8 +143,7 @@ class PPOMultiDiscreteMasked(Algorithm):
 
 		self.mse = nn.MSELoss()
 
-	def train(self, max_steps: int, save_models: bool = False, checkpoints: bool = False,
-			  save_freq: int = 1_000) -> None:
+	def train(self, max_steps: int, save_models: bool = False, checkpoints: bool = False, save_freq: int = 1_000) -> None:
 		"""
 		Trains the algorithm on the chosen environment
 		From https://arxiv.org/pdf/1707.06347.pdf and https://arxiv.org/pdf/2205.09123.pdf
@@ -341,24 +340,36 @@ class PPOMultiDiscreteMasked(Algorithm):
 		if not self.is_multi_agents:
 			obs = obs.reshape(1, -1)
 		obs = torch.from_numpy(self._flatten_obs(obs)).float().to(self.device)
-		masks = tuple(
-			torch.tensor(mask) for mask in infos["action_mask"]
-		)
+		if self.is_multi_agents:
+			masks = tuple(
+				torch.tensor(np.stack([
+					infos[i]["action_mask"][action_num] for i in range(self.num_agents)
+				]), device=self.device) for action_num in range(self.actions_nb)
+			)
+		else:
+			masks = tuple(
+				torch.tensor(mask) for mask in infos["action_mask"]
+			)
 		probs = self.actor(obs, masks)
 		dists = [
 			Categorical(probs=probs[i]) for i in range(self.actions_nb)
 		]
-		actions = torch.stack([
+		actions = [
 			dist.sample() for dist in dists
-		]).view(self.num_agents, self.actions_nb)
-		return actions.squeeze(0) .detach().numpy()
+		]
+		actions = torch.stack(actions).T
+		return actions.squeeze(0).detach().numpy()
 
 	def _extract_action_mask_from_infos(self, infos: dict) -> tensor:
 		if self.is_multi_agents:
-			raise NotImplementedError
+			return tuple(
+				torch.tensor(np.stack([
+					infos[i]["action_mask"][action_num] for i in range(self.num_envs * self.num_agents)
+				]), device=self.device) for action_num in range(self.actions_nb)
+			)
 		else:
 			return tuple(
 				torch.tensor(np.stack([
-					infos["action_mask"][env][action] for env in range(self.num_envs)
-				]), device=self.device) for action in range(self.actions_nb)
+					infos["action_mask"][env][action_num] for env in range(self.num_envs)
+				]), device=self.device) for action_num in range(self.actions_nb)
 			)

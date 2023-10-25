@@ -20,11 +20,20 @@ class GridWorldMAEnv(ParallelEnv):
 		self.width: int = width
 		self.height: int = height
 
+		self.max_steps: int = width * height // 2
+		self.steps: int = 0
+
 		self.possible_agents = list(range(agents_nb))
 		self.agents = self.possible_agents[:]
 
 		self.agents_xs: np.ndarray = np.array([0] * agents_nb)
 		self.agents_ys: np.ndarray = np.array([0] * agents_nb)
+		self.agents_steps: np.ndarray = np.array([0] * agents_nb)
+
+		# sets random colors for each agent
+		self.colors: list[tuple[int, int, int]] = [
+			(randint(0, 255), randint(0, 255), randint(0, 255)) for _ in range(agents_nb)
+		]
 
 		self.target_x: int = 0
 		self.target_y: int = 0
@@ -49,7 +58,9 @@ class GridWorldMAEnv(ParallelEnv):
 	def reset(self, seed=None, options=None) -> tuple[dict[int, np.ndarray], dict[str, Any]]:
 		self.agents_xs = np.random.randint(0, self.width - 1, size=self.num_agents)
 		self.agents_ys = np.random.randint(0, self.height - 1, size=self.num_agents)
+		self.agents_steps = np.array([0] * self.num_agents)
 		self.target_x, self.target_y = randint(0, self.width - 1), randint(0, self.height - 1)
+		self.steps = 0
 
 		self.render()
 
@@ -68,6 +79,7 @@ class GridWorldMAEnv(ParallelEnv):
 		prev_dists_to_target = self._get_dists_to_target()
 		self.agents_ys += dy
 		self.agents_xs += dx
+		self.agents_steps += 1
 		dists_to_target = self._get_dists_to_target()
 
 		got_closer = dists_to_target < prev_dists_to_target
@@ -76,7 +88,7 @@ class GridWorldMAEnv(ParallelEnv):
 			for agent in self.agents
 		}
 		truncateds = {
-			agent: self.agents_xs[agent] < 0 or self.agents_xs[agent] >= self.width or self.agents_ys[agent] < 0 or self.agents_ys[agent] >= self.height
+			agent: self.agents_xs[agent] < 0 or self.agents_xs[agent] >= self.width or self.agents_ys[agent] < 0 or self.agents_ys[agent] >= self.height or self.agents_steps[agent] >= self.max_steps
 			for agent in self.agents
 		}
 		rewards = {
@@ -88,6 +100,13 @@ class GridWorldMAEnv(ParallelEnv):
 			if terminateds[agent] or truncateds[agent]:
 				self.agents_xs[agent] = randint(0, self.width - 1)
 				self.agents_ys[agent] = randint(0, self.height - 1)
+				self.agents_steps[agent] = 0
+
+		if self.steps >= self.max_steps:
+			self.target_x, self.target_y = randint(0, self.width - 1), randint(0, self.height - 1)
+			self.steps = 0
+
+		self.steps += 1
 
 		self.render()
 
@@ -125,7 +144,7 @@ class GridWorldMAEnv(ParallelEnv):
 			for i in range(self.num_agents):
 				pg.draw.circle(
 					self.screen,
-					(0, 0, 255),
+					self.colors[i],
 					(self.agents_xs[i] * self.cell_size + self.cell_size // 2, self.agents_ys[i] * self.cell_size + self.cell_size // 2),
 					self.cell_size // 2
 				)
@@ -150,16 +169,31 @@ class GridWorldMAEnv(ParallelEnv):
 
 	def _get_infos(self):
 		return {
-			agent: {} for agent in self.agents
+			agent: {
+				"action_mask": self._get_action_mask(agent)
+			} for agent in self.agents
 		}
+
+	def _get_action_mask(self, agent: int) -> tuple[np.ndarray, np.ndarray]:
+		vertical_mask = np.ones(3, dtype=np.float32)
+		horizontal_mask = np.ones(3, dtype=np.float32)
+		if self.agents_xs[agent] == 0:
+			horizontal_mask[0] = 0
+		elif self.agents_xs[agent] == self.width - 1:
+			horizontal_mask[2] = 0
+		if self.agents_ys[agent] == 0:
+			vertical_mask[0] = 0
+		elif self.agents_ys[agent] == self.height - 1:
+			vertical_mask[2] = 0
+		return vertical_mask, horizontal_mask
 
 	@staticmethod
 	def _get_reward(got_closer: bool, terminated: bool, truncated: bool) -> float:
 		if truncated:
 			return -100
 		elif terminated:
-			return 10
+			return 20
 		elif got_closer:
-			return .5
+			return .1
 		else:
 			return -1

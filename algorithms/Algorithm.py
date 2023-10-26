@@ -14,6 +14,7 @@ class Algorithm:
 		self.config = config
 
 		self.num_envs = 1
+		self.num_agents = 1
 		self.is_multi_agents = False
 		self.device = torch.device("cpu")
 		self.action_space_low = tensor([0])
@@ -43,7 +44,7 @@ class Algorithm:
 		:param obs: observation to flatten
 		:return: the observation in one dimension
 		"""
-		if self.num_envs == 1:
+		if self.num_envs == 1 and self.num_agents == 1:
 			return np.array([
 				spaces.flatten(self.env_obs_space, obs)
 			])

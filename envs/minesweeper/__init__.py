@@ -1,1 +1,1 @@
-from .MinesweeperEnv import MinesweeperEnv
+from .Minesweeper import Minesweeper

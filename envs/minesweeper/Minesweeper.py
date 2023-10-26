@@ -6,8 +6,8 @@ import numpy as np
 from gymnasium.spaces import Box, Discrete, Dict
 
 
-class MinesweeperEnv(gym.Env):
-	metadata = {"render_modes": ["ansi"], "render_fps": 1, "name": "MinesweeperEnv-v0"}
+class Minesweeper(gym.Env):
+	metadata = {"render_modes": ["ansi"], "render_fps": 1, "name": "Minesweeper-v0"}
 
 	def __init__(self, grid_width: int = 9, grid_height: int = 9, bombs_nb: int = 12, render_mode: str | None = None):
 		super().__init__()

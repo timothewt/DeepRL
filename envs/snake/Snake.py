@@ -8,8 +8,8 @@ import numpy as np
 from gymnasium import spaces
 
 
-class SnakeEnv(gym.Env):
-	metadata = {"render_modes": ["ansi", "human"], "render_fps": 15, "name": "SnakeEnv-v0"}
+class Snake(gym.Env):
+	metadata = {"render_modes": ["ansi", "human"], "render_fps": 15, "name": "Snake-v0"}
 
 	def __init__(self, width: int = 12, height: int = 12, render_mode: str | None = None):
 		super().__init__()

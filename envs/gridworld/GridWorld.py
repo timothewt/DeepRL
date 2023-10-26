@@ -8,8 +8,8 @@ import numpy as np
 from gymnasium import spaces
 
 
-class GridWorldEnv(gym.Env):
-	metadata = {"render_modes": ["ansi", "human"], "render_fps": 10, "name": "GridWorldEnv-v0"}
+class GridWorld(gym.Env):
+	metadata = {"render_modes": ["ansi", "human"], "render_fps": 10, "name": "GridWorld-v0"}
 
 	def __init__(self, width: int = 12, height: int = 12, render_mode: str | None = None):
 		super().__init__()

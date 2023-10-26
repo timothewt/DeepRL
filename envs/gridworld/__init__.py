@@ -1,2 +1,2 @@
-from .GridWorldEnv import GridWorldEnv
-from .GridWorldMAEnv import GridWorldMAEnv
+from .GridWorld import GridWorld
+from .GridWorldMA import GridWorldMA

@@ -8,11 +8,11 @@ from gymnasium import spaces
 from pettingzoo import ParallelEnv
 
 
-class GridWorldMAEnv(ParallelEnv):
+class GridWorldMA(ParallelEnv):
 	"""
 	Multi-agents gridworld environment, multiple agents trying to reach the target, when one reaches, respawns somewhere else.
 	"""
-	metadata = {"render_modes": ["ansi", "human"], "render_fps": 5, "name": "GridWorldMAEnv-v0"}
+	metadata = {"render_modes": ["ansi", "human"], "render_fps": 5, "name": "GridWorldMA-v0"}
 
 	def __init__(self, agents_nb: int = 1, width: int = 12, height: int = 12, render_mode: str | None = None):
 		super().__init__()

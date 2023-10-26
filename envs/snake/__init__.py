@@ -1,1 +1,1 @@
-from .SnakeEnv import SnakeEnv
+from .Snake import Snake
